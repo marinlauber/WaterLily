@@ -7,7 +7,7 @@ include("BiotSavart.jl")
 RankineVortex(i,xy,center,R,Γ)
 """
 function RankineVortex(i, xy, center, R=4, Γ=1)
-    xy = (xy .- 0.5 .- center)
+    xy = (xy .- 1.5 .- center)
     x,y = xy
     θ = atan(y,x)
     r = norm(xy)

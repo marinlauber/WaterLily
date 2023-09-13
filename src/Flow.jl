@@ -85,8 +85,10 @@ struct Flow{D, T, Sf<:AbstractArray{T}, Vf<:AbstractArray{T}, Tf<:AbstractArray{
     # Fluid fields
     u :: Vf # velocity vector field
     u⁰:: Vf # previous velocity
+    uˢ:: Vf # stored velocity
     f :: Vf # force vector
     p :: Sf # pressure scalar field
+    pˢ:: Sf # stored pressure field
     σ :: Sf # divergence scalar
     # BDIM fields
     V :: Vf # body velocity vector
@@ -111,9 +113,6 @@ struct Flow{D, T, Sf<:AbstractArray{T}, Vf<:AbstractArray{T}, Tf<:AbstractArray{
         new{D,T,typeof(p),typeof(u),typeof(μ₁)}(u,u⁰,fv,p,σ,V,μ₀,μ₁,U,T[Δt],ν,g,exitBC,perdir)
     end
 end
-
-time(flow::Flow) = sum(flow.Δt[1:end-1])
-timeNext(flow::Flow) = sum(flow.Δt)
 
 function BDIM!(a::Flow)
     dt = a.Δt[end]

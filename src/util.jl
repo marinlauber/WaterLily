@@ -1,4 +1,8 @@
 using KernelAbstractions: get_backend, @index, @kernel
+using EllipsisNotation
+using CUDA: CuArray
+using AMDGPU: ROCArray
+GPUArray = Union{CuArray,ROCArray}
 
 @inline CI(a...) = CartesianIndex(a...)
 """
@@ -198,4 +202,31 @@ function BC!(a;perdir=(0,))
             @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
         end
     end
+end
+"""
+    interp(x::SVector, arr::AbstractArray)
+
+    Linear interpolation from array `arr` at index-coordinate `x`.
+    Note: This routine works for any number of dimensions.
+"""
+function interp(x::SVector{D,T}, arr::AbstractArray{T,D}) where {D,T}
+    # Index below the interpolation coordinate and the difference
+    i = floor.(Int,x); y = x.-i
+    
+    # CartesianIndices around x 
+    I = CartesianIndex(i...); R = I:I+oneunit(I)
+
+    # Linearly weighted sum over arr[R] (in serial)
+    s = zero(T)
+    @fastmath @inbounds @simd for J in R
+        weight = prod(@. ifelse(J.I==I.I,1-y,y))
+        s += arr[J]*weight
+    end
+    return s
+end
+
+function interp(x::SVector{D,T}, varr::AbstractArray{T}) where {D,T}
+    # Shift to align with each staggered grid component and interpolate
+    @inline shift(i) = SVector{D,T}(ifelse(i==j,0.5,0.) for j in 1:D)
+    return SVector{D,T}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
 end

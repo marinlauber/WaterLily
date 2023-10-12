@@ -23,9 +23,6 @@ export AutoBody,measure,sdf,+,-
 
 include("Metrics.jl")
 
-include("Splines.jl")
-export SplineBody,measure,sdf
-
 """
     Simulation(dims::NTuple, u_BC::NTuple, L::Number;
                U=norm2(u_BC), Δt=0.25, ν=0., ϵ=1,

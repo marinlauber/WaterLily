@@ -1,5 +1,4 @@
 using KernelAbstractions: get_backend, @index, @kernel
-using EllipsisNotation
 using CUDA: CuArray
 using AMDGPU: ROCArray
 GPUArray = Union{CuArray,ROCArray}

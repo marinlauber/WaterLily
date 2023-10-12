@@ -3,12 +3,18 @@ using WriteVTK
 using Printf: @sprintf
 
 # module vtkWriter
+
+# default writer attributes
+_velocity(a::Simulation) = a.flow.u
+_pressure(a::Simulation) = a.flow.p
+# links a data to a waz of getting the data
+default_attrib() = Dict("Velocity"=>_velocity, "Pressure"=>_pressure)
 struct vtkWriter
     fname::String
     collection::WriteVTK.CollectionFile
     output_attrib::Dict{String,Function}
     count::Vector{Int}
-    function vtkWriter(fname;attrib=default_attrib,T=Float32)
+    function vtkWriter(fname;attrib=default_attrib(),T=Float32)
         new(fname,paraview_collection(fname),attrib,[0])
     end
 end

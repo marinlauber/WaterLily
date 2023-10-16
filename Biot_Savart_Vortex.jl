@@ -39,8 +39,30 @@ flood(sim.flow.u[:,:,2]; shift=(-0.5,-0.5))
 @inside sim.flow.σ[I] = WaterLily.curl(3,I,sim.flow.u)
 flood(sim.flow.σ; shift=(-0.5,-0.5))
 
-# compute velocity
-BiotSavart!(u,sim.flow.σ)
+# compute velocity, one cell at a time
+N,n = WaterLily.size_u(u)
+# for i ∈ 1:n, Is ∈ WaterLily.inside_u(N,i)
+    # BiotSavart!(i,Is,u,sim.flow.σ)
+# end
+# BiotSavart!(u,sim.flow.σ)
+
+κ = copy(sim.flow.σ); κ .= 0.0
+# compute the full kernel and then dot it
+# for i ∈ 1:n, Is ∈ WaterLily.inside_u(N,i)
+    # BiotSavartKernel!(i,Is,κ)
+    # u[Is,i] = dot(κ,sim.flow.σ)
+# end
+
+pos = zeros(size(u)...)
+for Is ∈ WaterLily.inside(κ)
+    pos[Is,:] = loc(0,Is)
+end
+# method where we pass it a empty kernel array a a position array
+for i ∈ 1:n, Is ∈ WaterLily.inside_u(N,i)
+    BiotSavart!(i,loc(i,Is),κ,pos,WaterLily.inside_u(N,i))
+    u[Is,i] = dot(κ,sim.flow.σ)
+end
+
 
 # error
 BC!(sim.flow.u,zeros(2))

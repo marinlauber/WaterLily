@@ -1,5 +1,14 @@
 using Plots; gr()
 
+function get_omega!(sim)
+    body(I) = sum(WaterLily.ϕ(i,CartesianIndex(I,i),sim.flow.μ₀) for i ∈ 1:2)/2
+    @inside sim.flow.σ[I] = WaterLily.curl(3,I,sim.flow.u) * body(I) * sim.L / sim.U
+end
+
+plot_vorticity(ω; limit=maximum(abs,ω)) =contourf(clamp.(ω,-limit,limit)',dpi=300,
+    color=palette(:RdBu_11), clims=(-limit, limit), linewidth=0,
+    aspect_ratio=:equal, legend=false, border=:none)
+
 function flood(f::Array;shift=(0.,0.),cfill=:RdBu_11,clims=(),levels=10,kv...)
     if length(clims)==2
         @assert clims[1]<clims[2]

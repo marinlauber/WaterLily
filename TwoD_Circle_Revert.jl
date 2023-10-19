@@ -44,7 +44,7 @@ t₀ = 0.0
                 break
             end 
 
-            # ifw e have not converged, we must revert
+            # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
             iter += 1
         end

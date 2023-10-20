@@ -1,6 +1,7 @@
 using WaterLily
 using ParametricBodies
 using Splines
+using LinearAlgebra
 using StaticArrays
 include("examples/TwoD_plots.jl")
 
@@ -8,11 +9,87 @@ function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
 
-function accelerate(pnts_old, f_old, pnts_new, f_new, ω)
-    pnts_old = (1-ω)*pnts_old .+ ω*pnts_new
-    f_old =    (1-ω)*f_old    .+ ω*f_new
-    return pnts_old, f_old
+abstract type AbstractCoupling end
+
+struct Relaxation <: AbstractCoupling
+    ω :: Float64
+    x :: AbstractArray{Float64}
+    x_s :: AbstractArray{Float64}
+    function Relaxation(x⁰::AbstractArray{Float64},xs⁰::AbstractArray{Float64};ω::Float64=0.5)
+        new(0.5,zero(x⁰),zero(xs⁰))
+    end
 end
+function update(cp::Relaxation, x_new, x_new_s) 
+    # relax primary data
+    r = x_new .- cp.x
+    cp.x .= x_new
+    x_new .+= cp.ω.*r
+    # relax secondary data
+    r_s = x_new_s .- cp.x_s
+    cp.x_s .= x_new_s
+    x_new_s .+= cp.ω.*r_s
+    return x_new, x_new_s
+end
+
+struct IQNCoupling <: AbstractCoupling
+    ω :: Float64
+    x :: AbstractArray{Float64}
+    r :: AbstractArray{Float64}
+    x_s :: AbstractArray{Float64}
+    r_s :: AbstractArray{Float64}
+    V :: AbstractArray{Float64}
+    W :: AbstractArray{Float64}
+    Ws :: AbstractArray{Float64}
+    iter :: Vector{Int64}
+    function IQNCoupling(x⁰::AbstractArray{Float64},xs⁰::AbstractArray{Float64};ω::Float64=0.5)
+        N1=length(x⁰); N2=length(xs⁰)
+        # Ws is of size (N2,N1) as there are only N1 cᵏ
+        new(ω,zero(x⁰),zero(x⁰),zero(xs⁰),zero(xs⁰),zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
+    end
+end
+function backsub(A,b)
+    n = size(A,1)
+    x = zeros(n)
+    x[n] = b[n]/A[n,n]
+    for i in n-1:-1:1
+        s = sum( A[i,j]*x[j] for j in i+1:n )
+        x[i] = ( b[i] - s ) / A[i,i]
+    end
+    return x
+end
+function update(cp::IQNCoupling, x_new, x_new_s)
+    if cp.iter[1]==0 # relaxation step
+        # relax primary data
+        r = x_new .- cp.x
+        cp.x .= x_new
+        cp.r .= r
+        x_new .+= cp.ω.*r
+        # relax secondary data
+        r_s = x_new_s .- cp.x_s
+        cp.x_s .= x_new_s
+        cp.r_s .= r_s
+        x_new_s .+= cp.ω.*r_s
+        # cp.iter[1] = 1
+    else
+        k = cp.iter[1]; N = length(cp.x)
+        # compute residuals
+        r  = x_new .- cp.x
+        r_s= x_new_s .- cp.x_s
+        # roll the matrix to make space for new column
+        roll!(cp.V); roll!(cp.W); roll!(cp.Ws)
+        cp.V[:,1] = r .- cp.r; cp.r .= r
+        cp.W[:,1] = x_new .- cp.x; cp.x .= x_new
+        cp.Ws[:,1] = x_new_s .- cp.x_s; cp.x_s .= x_new_s # secondary data
+        # solve least-square problem with Housholder QR decomposition
+        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(k,N)])
+        cᵏ = backsub(Rᵏ,-Qᵏ'*r)
+        x_new   .+= (@view cp.W[:,1:min(k,N)])*cᵏ #.+ rᵏ #not sure
+        x_new_s .+= (@view cp.Ws[:,1:min(k,N)])*cᵏ # secondary data
+        cp.iter[1] = k + 1
+    end
+    return x_new, x_new_s
+end
+roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
 
 # relative resudials
 res(a,b) = norm(a-b)/norm(b)
@@ -24,7 +101,7 @@ ptLeft = 0.0
 ptRight = 1.0
 A = 0.1
 L = 1.0
-EI = 0.5
+EI = 0.25
 EA = 10000.0
 f(s) = [0.0,0.0] # s is curvilinear coordinate
 
@@ -80,28 +157,32 @@ thk=2ϵ+√2
 ParametricBodies.dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
-u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[3L,2L])
+u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[3L,2L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
 body = DynamicBody(nurbs, (0,1));
 
 # make a simulation
-sim = Simulation((4L,6L), (0,U), L; ν=U*L/Re, body, T=Float64)
+sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 15
+duration = 20
 step = 0.1
 t₀ = 0.0
-ωᵣ = 0.05 # ωᵣ ∈ [0,1] is the relaxation parameter
+ωᵣ = 0.25 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(p)
 
 # intialise coupling
 # f_old = zeros((2,length(integration_points))); f_old[2,:] .= 2P*sin(2π*fhz*0.0)
-f_old = force(body,sim)
+f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
+
+# coupling
+relax = IQNCoupling([pnts_old...],[f_old...];ω=ωᵣ)
+# relax = Relaxation([pnts_old...],[f_old...];ω=ωᵣ)
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -137,12 +218,12 @@ pnts_old = zero(u⁰); pnts_old .+= u⁰
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            f_new = min(1.0,tᵢ).*force(body,sim)
+            f_new = min(1.0,5tᵢ).*force(body,sim)
             # f_new = zero(f_old); f_new[2,:] .= 2P*sin(2π*fhz*tⁿ⁺¹)
 
             # check that residuals have converged
-            rd=res(pnts_new,pnts_old); rf=res(f_new,f_old);
-            println("    Iter: ",iter,", rd: ",round(rd,digits=4),", rf: ",round(rf,digits=4))
+            rd = res(pnts_new,pnts_old); rf = res(f_new,f_old);
+            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
             if ((rd<1e-3) && (rf<1e-3)) || iter > 20 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
                 dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
@@ -150,7 +231,11 @@ pnts_old = zero(u⁰); pnts_old .+= u⁰
             end
 
             # accelerate coupling
-            pnts_old, f_old = accelerate(pnts_old, f_old, pnts_new, f_new, ωᵣ)
+            # pnts_old, f_old = accelerate(pnts_old, f_old, pnts_new, f_new, ωᵣ)
+            pnts_old, f_old = update(relax, [pnts_new...], [f_new...])
+            # f_old, pnts_old = update(relax, [f_new...], [pnts_new...])
+            pnts_old = reshape(pnts_old, (2,p.mesh.numBasis))
+            f_old    = reshape(f_old, size_f)
 
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)

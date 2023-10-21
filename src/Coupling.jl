@@ -1,56 +1,42 @@
-using LinearAlgebra
-using StaticArrays
-using Plots
-using IterativeSolvers
-
-L₂(x) = sqrt(sum(abs2,x))/length(x)
+using LinearAlgebra: norm, qr
 
 abstract type AbstractCoupling end
 
-struct ConstantRelaxation <: AbstractCoupling
-    ω :: Float64
-    r :: AbstractArray{Float64}
-    x :: AbstractArray{Float64}
-    function ConstantRelaxation(N::Int64;ω::Float64=0.5)
-        new(ω,zeros(N),zeros(N))
+struct Relaxation <: AbstractCoupling
+    ω :: Float64                  # relaxation parameter
+    x :: AbstractArray{Float64}   # primary variable
+    xₛ :: AbstractArray{Float64}  # secondary variable
+    function Relaxation(primary::AbstractArray{Float64},secondary::AbstractArray{Float64};relax::Float64=0.5)
+        new(relax,zero(primary),zero(secondary))
     end
 end
-function update(cp::ConstantRelaxation, xᵏ, rᵏ)
-    x = (1-cp.ω)*xᵏ .+ cp.ω*cp.x; cp.x .= xᵏ
-    r = (1-cp.ω)*rᵏ .+ cp.ω*cp.r; cp.r .= rᵏ
-    return x, r
+function update(cp::Relaxation, x_new, x_newₛ) 
+    # relax primary data
+    r = x_new .- cp.x
+    cp.x .= x_new
+    x_new .+= cp.ω.*r
+    # relax secondary data
+    rₛ = x_newₛ .- cp.xₛ
+    cp.xₛ .= x_newₛ
+    x_newₛ .+= cp.ω.*rₛ
+    return x_new, x_newₛ
 end
 
 struct IQNCoupling <: AbstractCoupling
-    ω :: Float64
-    r :: AbstractArray{Float64}
-    x :: AbstractArray{Float64}
-    V :: AbstractArray{Float64}
-    W :: AbstractArray{Float64}
-    iter :: Vector{Int64}
-    function IQNCoupling(N::Int64;ω::Float64=0.5)
-        new(ω,zeros(N),zeros(N),zeros(N,N),zeros(N,N),[0])
+    ω :: Float64                    # intial relaxation
+    x :: AbstractArray{Float64}     # primary variable
+    r :: AbstractArray{Float64}     # primary residual
+    xₛ :: AbstractArray{Float64}   # secondary variabe
+    rₛ :: AbstractArray{Float64}   # secondary residual
+    V :: AbstractArray{Float64}     # primary residual difference
+    W :: AbstractArray{Float64}     # primary variable difference
+    Wₛ :: AbstractArray{Float64}    # secondary variable difference
+    iter :: Vector{Int64}           # iteration counter
+    function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray{Float64};relax::Float64=0.5)
+        N1=length(primary); N2=length(secondary)
+        # Ws is of size (N2,N1) as there are only N1 cᵏ
+        new(relax,zero(primary),zero(primary),zero(secondary),zero(secondary),zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
     end
-end
-function update(cp::IQNCoupling, xᵏ, rᵏ)
-    if cp.iter[1]==0
-        # store variable and residual
-        cp.x .= xᵏ; cp.r .= rᵏ
-        # relaxation update
-        xᵏ .+= cp.ω*rᵏ
-        cp.iter[1] = 1
-    else
-        # roll the matrix to make space for new column
-        roll!(cp.V); roll!(cp.W)
-        cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
-        cp.W[:,1] = xᵏ .- cp.x; cp.x .= xᵏ
-        # solve least-square problem with Housholder QR decomposition
-        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[1],N)])
-        cᵏ = backsub(Rᵏ,-Qᵏ'*rᵏ)
-        xᵏ.+= (@view cp.W[:,1:min(cp.iter[1],N)])*cᵏ #.+ rᵏ #not sure
-        cp.iter[1] = cp.iter[1] + 1
-    end
-    return xᵏ
 end
 function backsub(A,b)
     n = size(A,1)
@@ -62,42 +48,39 @@ function backsub(A,b)
     end
     return x
 end
+function update(cp::IQNCoupling, x_new, x_newₛ)
+    if cp.iter[1]==0 # relaxation step
+        # relax primary data
+        r = x_new .- cp.x
+        cp.x .= x_new
+        cp.r .= r
+        x_new .+= cp.ω.*r
+        # relax secondary data
+        rₛ = x_newₛ .- cp.xₛ
+        cp.xₛ .= x_newₛ
+        cp.rₛ .= rₛ
+        x_newₛ .+= cp.ω.*rₛ
+        # cp.iter[1] = 1
+    else
+        k = cp.iter[1]; N = length(cp.x)
+        # compute residuals
+        r = x_new .- cp.x
+        rₛ= x_newₛ.- cp.xₛ
+        # roll the matrix to make space for new column
+        roll!(cp.V); roll!(cp.W); roll!(cp.Ws)
+        cp.V[:,1] = r .- cp.r; cp.r .= r
+        cp.W[:,1] = x_new .- cp.x; cp.x .= x_new
+        cp.Ws[:,1] = x_newₛ .- cp.xₛ; cp.xₛ .= x_newₛ # secondary data
+        # solve least-square problem with Housholder QR decomposition
+        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(k,N)])
+        cᵏ = backsub(Rᵏ,-Qᵏ'*r)
+        x_new   .+= (@view cp.W[:,1:min(k,N)])*cᵏ #.+ rᵏ #not sure
+        x_newₛ .+= (@view cp.Ws[:,1:min(k,N)])*cᵏ # secondary data
+        cp.iter[1] = k + 1
+    end
+    return x_new, x_newₛ
+end
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
 
-
-
-# non-symmetric matrix wih know eigenvalues
-N = 100
-λ = 10 .+ (1:N)
-A = rand(N,N) + diagm(λ)
-b = rand(N);
-
-# IQNILS method
-f(x) = b - A*x
-
-# Reference solution
-x0 = copy(b)
-@time sol,history = IterativeSolvers.gmres(A,b;log=true, reltol=1e-16)
-resid = history.data[:resnorm]
-@assert L₂(f(sol)) < 1e-6
-
-p = plot(resid, marker=:d, xaxis=:log10, yaxis=:log10, label="IterativeSolvers.GMRES",
-         xlabel="Iteration", ylabel="Residual",
-         xlim=(1,200), ylim=(1e-16,1e2), legend=:bottomleft)
-
-# IQNILS method
-IQNSolver = IQNCoupling(N;ω=0.05)
-xᵏ = copy(b); rᵏ = f(xᵏ); k=1; resid=[]; sol=[]
-@time while L₂(rᵏ) > 1e-16 && k < 2N
-    global xᵏ, rᵏ, k, resid, sol
-    xᵏ = update(IQNSolver, xᵏ, rᵏ)
-    rᵏ = f(xᵏ)
-    push!(sol,xᵏ)
-    push!(resid,L₂(rᵏ))
-    k+=1
-end
-@assert L₂(f(sol[end])) < 1e-6
-
-plot!(p, resid, marker=:o, xaxis=:log10, yaxis=:log10, label="IQN-ILS struct", legend=:bottomleft)
-# savefig(p, "GMRESvsIQNILS.png")
-p
+# relative resudials
+res(a,b) = norm(a-b)/norm(b)

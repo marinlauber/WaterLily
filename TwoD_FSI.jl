@@ -1,98 +1,12 @@
 using WaterLily
 using ParametricBodies
 using Splines
-using LinearAlgebra
 using StaticArrays
 include("examples/TwoD_plots.jl")
 
 function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
-
-abstract type AbstractCoupling end
-
-struct Relaxation <: AbstractCoupling
-    ω :: Float64
-    x :: AbstractArray{Float64}
-    x_s :: AbstractArray{Float64}
-    function Relaxation(x⁰::AbstractArray{Float64},xs⁰::AbstractArray{Float64};ω::Float64=0.5)
-        new(0.5,zero(x⁰),zero(xs⁰))
-    end
-end
-function update(cp::Relaxation, x_new, x_new_s) 
-    # relax primary data
-    r = x_new .- cp.x
-    cp.x .= x_new
-    x_new .+= cp.ω.*r
-    # relax secondary data
-    r_s = x_new_s .- cp.x_s
-    cp.x_s .= x_new_s
-    x_new_s .+= cp.ω.*r_s
-    return x_new, x_new_s
-end
-
-struct IQNCoupling <: AbstractCoupling
-    ω :: Float64
-    x :: AbstractArray{Float64}
-    r :: AbstractArray{Float64}
-    x_s :: AbstractArray{Float64}
-    r_s :: AbstractArray{Float64}
-    V :: AbstractArray{Float64}
-    W :: AbstractArray{Float64}
-    Ws :: AbstractArray{Float64}
-    iter :: Vector{Int64}
-    function IQNCoupling(x⁰::AbstractArray{Float64},xs⁰::AbstractArray{Float64};ω::Float64=0.5)
-        N1=length(x⁰); N2=length(xs⁰)
-        # Ws is of size (N2,N1) as there are only N1 cᵏ
-        new(ω,zero(x⁰),zero(x⁰),zero(xs⁰),zero(xs⁰),zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
-    end
-end
-function backsub(A,b)
-    n = size(A,1)
-    x = zeros(n)
-    x[n] = b[n]/A[n,n]
-    for i in n-1:-1:1
-        s = sum( A[i,j]*x[j] for j in i+1:n )
-        x[i] = ( b[i] - s ) / A[i,i]
-    end
-    return x
-end
-function update(cp::IQNCoupling, x_new, x_new_s)
-    if cp.iter[1]==0 # relaxation step
-        # relax primary data
-        r = x_new .- cp.x
-        cp.x .= x_new
-        cp.r .= r
-        x_new .+= cp.ω.*r
-        # relax secondary data
-        r_s = x_new_s .- cp.x_s
-        cp.x_s .= x_new_s
-        cp.r_s .= r_s
-        x_new_s .+= cp.ω.*r_s
-        # cp.iter[1] = 1
-    else
-        k = cp.iter[1]; N = length(cp.x)
-        # compute residuals
-        r  = x_new .- cp.x
-        r_s= x_new_s .- cp.x_s
-        # roll the matrix to make space for new column
-        roll!(cp.V); roll!(cp.W); roll!(cp.Ws)
-        cp.V[:,1] = r .- cp.r; cp.r .= r
-        cp.W[:,1] = x_new .- cp.x; cp.x .= x_new
-        cp.Ws[:,1] = x_new_s .- cp.x_s; cp.x_s .= x_new_s # secondary data
-        # solve least-square problem with Housholder QR decomposition
-        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(k,N)])
-        cᵏ = backsub(Rᵏ,-Qᵏ'*r)
-        x_new   .+= (@view cp.W[:,1:min(k,N)])*cᵏ #.+ rᵏ #not sure
-        x_new_s .+= (@view cp.Ws[:,1:min(k,N)])*cᵏ # secondary data
-        cp.iter[1] = k + 1
-    end
-    return x_new, x_new_s
-end
-roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
-
-# relative resudials
-res(a,b) = norm(a-b)/norm(b)
 
 # Material properties and mesh
 numElem=4
@@ -181,8 +95,8 @@ f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
 # coupling
-relax = IQNCoupling([pnts_old...],[f_old...];ω=ωᵣ)
-# relax = Relaxation([pnts_old...],[f_old...];ω=ωᵣ)
+relax = IQNCoupling([pnts_old...],[f_old...];relax=ωᵣ)
+# relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)

@@ -3,6 +3,7 @@ using Plots; gr()
 using StaticArrays
 include("TwoD_plots.jl")
 
+<<<<<<< HEAD
 # required to keep things global
 let 
     # parameters
@@ -69,3 +70,79 @@ let
         println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
+=======
+# parameters
+Re = 250
+U = 1
+nx, ny = 3*2^6, 2^7
+radius, center = ny/8, ny/2
+duration = 10
+step = 0.1
+
+# fsi parameters
+T = 4*radius
+amp = 0.354
+mₐ = π*radius^2 # added-mass coefficent circle
+m = 0.1*mₐ
+k = (2*pi/T)^2*(m+mₐ)
+pos = amp*20
+vel = 0
+a0 = 0
+t_init = 0
+
+# motion function uses global var to adjust
+posx(t) = pos + (t-t_init)*vel
+
+# motion definition
+function map(x,t)
+    # x - SA[posx(t),0]
+    x - SA[0,posx(t)]
+end
+
+# mₐke a body
+circle = AutoBody((x,t)->√sum(abs2, x .- center) - radius, map)
+z = [radius*exp(im*θ) for θ ∈ range(0,2π,length=33)]
+
+# generate sim
+sim = Simulation((nx,ny), (U,0), radius; ν=U*radius/Re, body=circle)
+
+# get start time
+t₀ = round(sim_time(sim))
+
+@time @gif for tᵢ in range(t₀,t₀+duration;step)
+
+    # update until time tᵢ in the background, equivalent to
+    # sim_step!(sim,tᵢ;remeasure=true)
+    t = sum(sim.flow.Δt[1:end-1])
+    while t < tᵢ*sim.L/sim.U
+
+        # measure body
+        measure!(sim,t)
+
+        # update flow
+        mom_step!(sim.flow,sim.pois)
+        
+        # pressure force
+        force = -WaterLily.∮nds(sim.flow.p,sim.flow.f,circle,t)
+        
+        # compute motion and acceleration 1DOF
+        Δt = sim.flow.Δt[end]
+        accel = (force[2]- k*pos + mₐ*a0)/(m + mₐ)
+        global pos += Δt*(vel+Δt*accel/2.) 
+        global vel += Δt*accel
+        global a0 = accel
+        
+        # update time, must be done globaly to set the pos/vel correctly
+        global t_init = t
+        t += Δt
+    end
+
+    # plot vorticity
+    @inside sim.flow.σ[I] = WaterLily.curl(3,I,sim.flow.u)*sim.L/sim.U
+    flood(sim.flow.σ; shift=(-0.5,-0.5),clims=(-5,5))
+    addbody(real(z.+center),imag(z.+im*center.+im*pos))
+    
+    # print time step
+    println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
+end
+>>>>>>> 66b15bb (updated coupling primary data)

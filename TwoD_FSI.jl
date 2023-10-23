@@ -81,7 +81,7 @@ body = DynamicBody(nurbs, (0,1));
 sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 20
+duration = 20.0
 step = 0.1
 t₀ = 0.0
 ωᵣ = 0.25 # ωᵣ ∈ [0,1] is the relaxation parameter
@@ -95,7 +95,7 @@ f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
 # coupling
-relax = IQNCoupling([pnts_old...],[f_old...];relax=ωᵣ)
+relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
 # relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
 
 # time loop
@@ -117,7 +117,7 @@ relax = IQNCoupling([pnts_old...],[f_old...];relax=ωᵣ)
         # time steps
         Δt = sim.flow.Δt[end]/sim.L*sim.U
         tⁿ = t/sim.L*sim.U; # previous time instant
-        tⁿ⁺¹ = tⁿ + Δt; # current time install
+        tⁿ⁺¹ = tⁿ + Δt;     # current time install
         
         # implicit solve
         iter = 1; r₂ = 1.0;
@@ -132,8 +132,7 @@ relax = IQNCoupling([pnts_old...],[f_old...];relax=ωᵣ)
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            f_new = min(1.0,5tᵢ).*force(body,sim)
-            # f_new = zero(f_old); f_new[2,:] .= 2P*sin(2π*fhz*tⁿ⁺¹)
+            f_new = force(body,sim)
 
             # check that residuals have converged
             rd = res(pnts_new,pnts_old); rf = res(f_new,f_old);
@@ -146,8 +145,8 @@ relax = IQNCoupling([pnts_old...],[f_old...];relax=ωᵣ)
 
             # accelerate coupling
             # pnts_old, f_old = accelerate(pnts_old, f_old, pnts_new, f_new, ωᵣ)
-            pnts_old, f_old = update(relax, [pnts_new...], [f_new...])
-            # f_old, pnts_old = update(relax, [f_new...], [pnts_new...])
+            # pnts_old, f_old = update(relax, [pnts_new...], [f_new...])
+            f_old, pnts_old = update(relax, [f_new...], [pnts_new...])
             pnts_old = reshape(pnts_old, (2,p.mesh.numBasis))
             f_old    = reshape(f_old, size_f)
 

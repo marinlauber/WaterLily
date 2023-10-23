@@ -51,9 +51,9 @@ anim = @animate for tᵢ in range(t₀,t₀+duration;step=tstep)
     t = sum(sim.flow.Δt[1:end-1])
     while t < tᵢ*sim.L/sim.U
         # random update
-        Body.surf.pnts .=  SA[-1 0 1
-                              0.5 0.25+0.5*sin(π/4*t/sim.L) 0]*L .+ [2L,3L]
-        ParametricBodies.update!(Body,t)
+        new_pnts = SA[-1 0 1
+                      0.5 0.25+0.5*sin(π/4*t/sim.L) 0]*L .+ [2L,3L]
+        ParametricBodies.update!(Body,new_pnts,sim.flow.Δt[end])
         measure!(sim,t)
         mom_step!(sim.flow,sim.pois) # evolve Flow
         t += sim.flow.Δt[end]
@@ -62,10 +62,8 @@ anim = @animate for tᵢ in range(t₀,t₀+duration;step=tstep)
     # flood plot
     get_omega!(sim);
     plot_vorticity(sim.flow.σ, limit=10)
-    Xs = reduce(hcat,[Body.surf(s,0.0) for s ∈ 0:0.01:1])
-    plot!(Xs[1,:].+0.5,Xs[2,:].+0.5,color=:black,lw=thk,legend=false)
-    plot!(Body.surf.pnts[1,:].+0.5,Body.surf.pnts[2,:].+0.5,marker=:circle,legend=:none)
-
+    plot!(Body.surf)
+    
     # print time step
     println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
 end

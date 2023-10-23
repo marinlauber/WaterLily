@@ -34,7 +34,7 @@ struct IQNCoupling <: AbstractCoupling
     iter :: Vector{Int64}           # iteration counter
     function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray{Float64};relax::Float64=0.5)
         N1=length(primary); N2=length(secondary)
-        # Ws is of size (N2,N1) as there are only N1 cᵏ
+        # Wₛ is of size (N2,N1) as there are only N1 cᵏ
         new(relax,zero(primary),zero(primary),zero(secondary),zero(secondary),zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
     end
 end
@@ -60,22 +60,23 @@ function update(cp::IQNCoupling, x_new, x_newₛ)
         cp.xₛ .= x_newₛ
         cp.rₛ .= rₛ
         x_newₛ .+= cp.ω.*rₛ
-        # cp.iter[1] = 1
+        # cp.iter[1] = 1 # triggers QN update
     else
         k = cp.iter[1]; N = length(cp.x)
         # compute residuals
         r = x_new .- cp.x
         rₛ= x_newₛ.- cp.xₛ
         # roll the matrix to make space for new column
-        roll!(cp.V); roll!(cp.W); roll!(cp.Ws)
-        cp.V[:,1] = r .- cp.r; cp.r .= r
-        cp.W[:,1] = x_new .- cp.x; cp.x .= x_new
-        cp.Ws[:,1] = x_newₛ .- cp.xₛ; cp.xₛ .= x_newₛ # secondary data
+        roll!(cp.V); roll!(cp.W); roll!(cp.Wₛ)
+        cp.V[:,1] = r .- cp.r;      cp.r .= r
+        cp.W[:,1] = x_new .- cp.x;  cp.x .= x_new
+        cp.Wₛ[:,1]= x_newₛ.- cp.xₛ; cp.xₛ.= x_newₛ # secondary data
         # solve least-square problem with Housholder QR decomposition
         Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(k,N)])
         cᵏ = backsub(Rᵏ,-Qᵏ'*r)
-        x_new   .+= (@view cp.W[:,1:min(k,N)])*cᵏ #.+ rᵏ #not sure
-        x_newₛ .+= (@view cp.Ws[:,1:min(k,N)])*cᵏ # secondary data
+        x_new  .+= (@view cp.W[:,1:min(k,N)]) *cᵏ .+ r # not sure
+        # x_newₛ .+= (@view cp.Wₛ[:,1:min(k,N)])*cᵏ .+ rₛ # secondary data
+        x_newₛ .+= cp.ω.*rₛ
         cp.iter[1] = k + 1
     end
     return x_new, x_newₛ

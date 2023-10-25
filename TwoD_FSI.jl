@@ -2,11 +2,83 @@ using WaterLily
 using ParametricBodies
 using Splines
 using StaticArrays
+using LinearAlgebra
 include("examples/TwoD_plots.jl")
 
 function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
+
+
+struct IQNCoupling2 <: WaterLily.AbstractCoupling
+    ω :: Float64                    # intial relaxation
+    x :: AbstractArray{Float64}     # primary variable
+    r :: AbstractArray{Float64}     # primary residual
+    V :: AbstractArray{Float64}     # primary residual difference
+    W :: AbstractArray{Float64}     # primary variable difference
+    subs                            # sub residual indices
+    iter :: Vector{Int64}           # iteration counter
+    function IQNCoupling2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
+        n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
+        subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
+        new(relax,zeros(N),zeros(N),zeros(N,N),zeros(N,N),subs,[0])
+    end
+end
+function concatenate!(vec, a, b, subs)
+    vec[subs[1]] = a[1,:];
+    vec[subs[2]] = a[2,:];
+    vec[subs[3]] = b[1,:];
+    vec[subs[4]] = b[2,:];
+end
+function revert!(vec, a, b, subs)
+    a[1,:] = vec[subs[1]];
+    a[2,:] = vec[subs[2]];
+    b[1,:] = vec[subs[3]];
+    b[2,:] = vec[subs[4]];
+end
+function preconditonner(r,subs,reset)
+    Φᵏ = ones(length(r))
+    reset && return Diagonal(Φᵏ);
+    for s in subs
+        Φᵏ[s] .= norm(r)/norm(r[s])
+    end
+    Diagonal(Φᵏ)
+end
+function Q1filter!(A;ϵ=1e-8)
+    N,_ = size(A); normA=norm(A)
+    for i ∈ N:-1:1
+        A[i,i]<ϵ*normA && popCol!(A,i);
+    end
+end
+function updateQN(cp::IQNCoupling2, x_new, new_t)
+    if cp.iter[1]==0 # relaxation step
+        # relax primary data
+        r = x_new .- cp.x
+        cp.x .= x_new
+        cp.r .= r
+        x_new .+= cp.ω.*r
+        cp.iter[1] = 1 # triggers QN update
+    else
+        k = cp.iter[1]; N = length(cp.x)
+        # compute residuals
+        r = x_new .- cp.x
+        # roll the matrix to make space for new column
+        WaterLily.roll!(cp.V); WaterLily.roll!(cp.W)
+        cp.V[:,1] = r .- cp.r;      cp.r .= r
+        cp.W[:,1] = x_new .- cp.x;  cp.x .= x_new
+        # preocndition system
+        Φᵏ=preconditonner(r,cp.subs,new_t); Vᵏ = Φᵏ*cp.V
+        # Q1filter!(Vᵏ; ϵ=1e-8)
+        # solve least-square problem with Housholder QR decomposition
+        Qᵏ,Rᵏ = qr(@view Vᵏ[:,1:min(k,N)])
+        cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*Φᵏ*r)
+        x_new .+= (@view cp.W[:,1:min(k,N)])*cᵏ # .+ r # not sure
+        cp.iter[1] = k + 1
+    end
+    return x_new
+end
+popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
+
 
 # Material properties and mesh
 numElem=4
@@ -81,7 +153,7 @@ body = DynamicBody(nurbs, (0,1));
 sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 20.0
+duration = 0.10
 step = 0.1
 t₀ = 0.0
 ωᵣ = 0.25 # ωᵣ ∈ [0,1] is the relaxation parameter
@@ -90,18 +162,20 @@ t₀ = 0.0
 integration_points = Splines.uv_integration(p)
 
 # intialise coupling
-# f_old = zeros((2,length(integration_points))); f_old[2,:] .= 2P*sin(2π*fhz*0.0)
 f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
 # coupling
-relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
+# relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
 # relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
+
+QNCouple = IQNCoupling2(pnts_old,f_old;relax=ωᵣ)
+updated_values = zero(QNCouple.x)
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
 
-    global dⁿ, vⁿ, aⁿ, f_old, pnts_old;
+    global dⁿ, vⁿ, aⁿ, f_old, pnts_old, updated_values;
 
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
@@ -120,7 +194,7 @@ relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
         tⁿ⁺¹ = tⁿ + Δt;     # current time install
         
         # implicit solve
-        iter = 1; r₂ = 1.0;
+        iter=1; new=true
 
         # iterative loop
         while true
@@ -144,16 +218,20 @@ relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
             end
 
             # accelerate coupling
+            concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
+            updated_values = updateQN(QNCouple, updated_values, new)
+            revert!(updated_values, pnts_old, f_old, QNCouple.subs)
             # pnts_old, f_old = accelerate(pnts_old, f_old, pnts_new, f_new, ωᵣ)
             # pnts_old, f_old = update(relax, [pnts_new...], [f_new...])
-            f_old, pnts_old = update(relax, [f_new...], [pnts_new...])
-            pnts_old = reshape(pnts_old, (2,p.mesh.numBasis))
-            f_old    = reshape(f_old, size_f)
-
+            # f_old, pnts_old = update(relax, [f_new...], [pnts_new...])
+            # pnts_old = reshape(pnts_old, (2,p.mesh.numBasis))
+            # f_old    = reshape(f_old, size_f)
+           
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
             dⁿ, vⁿ, aⁿ = cache
             iter += 1
+            new = false
         end
 
         # finish the time step

@@ -1,4 +1,4 @@
-using LinearAlgebra: norm, qr
+using LinearAlgebra: norm,qr,Diagonal
 
 abstract type AbstractCoupling end
 
@@ -35,7 +35,8 @@ struct IQNCoupling <: AbstractCoupling
     function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray{Float64};relax::Float64=0.5)
         N1=length(primary); N2=length(secondary)
         # Wₛ is of size (N2,N1) as there are only N1 cᵏ
-        new(relax,zero(primary),zero(primary),zero(secondary),zero(secondary),zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
+        new(relax,zero(primary),zero(primary),zero(secondary),zero(secondary),
+            zeros(N1,N1),zeros(N1,N1),zeros(N2,N1),[0])
     end
 end
 function backsub(A,b)
@@ -48,6 +49,14 @@ function backsub(A,b)
     end
     return x
 end
+# function backsub!(x::AbstractVector,A::AbstractArray,b::AbstractVector)
+#     n = size(A,1)
+#     x[n] = b[n]/A[n,n]
+#     for i in n-1:-1:1
+#         s = sum( A[i,j]*x[j] for j in i+1:n )
+#         x[i] = ( b[i] - s ) / A[i,i]
+#     end
+# end
 function update(cp::IQNCoupling, x_new, x_newₛ)
     if cp.iter[1]==0 # relaxation step
         # relax primary data
@@ -60,7 +69,7 @@ function update(cp::IQNCoupling, x_new, x_newₛ)
         cp.xₛ .= x_newₛ
         cp.rₛ .= rₛ
         x_newₛ .+= cp.ω.*rₛ
-        # cp.iter[1] = 1 # triggers QN update
+        cp.iter[1] = 1 # triggers QN update
     else
         k = cp.iter[1]; N = length(cp.x)
         # compute residuals
@@ -74,14 +83,17 @@ function update(cp::IQNCoupling, x_new, x_newₛ)
         # solve least-square problem with Housholder QR decomposition
         Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(k,N)])
         cᵏ = backsub(Rᵏ,-Qᵏ'*r)
+        println(size(cᵏ))
         x_new  .+= (@view cp.W[:,1:min(k,N)]) *cᵏ .+ r # not sure
-        # x_newₛ .+= (@view cp.Wₛ[:,1:min(k,N)])*cᵏ .+ rₛ # secondary data
-        x_newₛ .+= cp.ω.*rₛ
+        x_newₛ .+= (@view cp.Wₛ[:,1:min(k,N)])*cᵏ .+ rₛ # secondary data
         cp.iter[1] = k + 1
     end
     return x_new, x_newₛ
 end
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
-
+# pop!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 # relative resudials
 res(a,b) = norm(a-b)/norm(b)
+
+
+

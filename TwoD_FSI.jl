@@ -9,19 +9,20 @@ function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
 
-
 struct IQNCoupling2 <: WaterLily.AbstractCoupling
     ω :: Float64                    # intial relaxation
     x :: AbstractArray{Float64}     # primary variable
+    x̃ :: AbstractArray{Float64}     # old solver iter (not relaxed)
     r :: AbstractArray{Float64}     # primary residual
     V :: AbstractArray{Float64}     # primary residual difference
     W :: AbstractArray{Float64}     # primary variable difference
     subs                            # sub residual indices
-    iter :: Vector{Int64}           # iteration counter
+    iter :: Dict{Symbol,Int64}      # iteration counter
     function IQNCoupling2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
-        new(relax,zeros(N),zeros(N),zeros(N,N),zeros(N,N),subs,[0])
+        x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
+        new(relax,x⁰,zeros(N),zeros(N),zeros(N,N),zeros(N,N),subs,Dict(:k => 0))
     end
 end
 function concatenate!(vec, a, b, subs)
@@ -50,16 +51,41 @@ function Q1filter!(A;ϵ=1e-8)
         A[i,i]<ϵ*normA && popCol!(A,i);
     end
 end
-function updateQN(cp::IQNCoupling2, x_new, new_t)
-    if cp.iter[1]==0 # relaxation step
+function updateQN2(cp::IQNCoupling2, xᵏ)
+    if cp.iter[:k]==0
+        # store variable and residual
+        rᵏ = xᵏ .- cp.x; cp.x̃.=xᵏ
+        # relaxation update
+        xᵏ .= cp.x .+ cp.ω*rᵏ
+        # store
+        cp.x.=xᵏ; cp.r.=rᵏ
+    else
+        # residuals
+        N = length(cp.x);
+        rᵏ = xᵏ .- 
+        # roll the matrix to make space for new column
+        WaterLily.roll!(cp.V); WaterLily.roll!(cp.W)
+        cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
+        cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
+        # solve least-square problem with Housholder QR decomposition
+        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[:k],N)])
+        cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*rᵏ)
+        xᵏ.= cp.x .+ (@view cp.W[:,1:min(cp.iter[:k],N)])*cᵏ .+ rᵏ #not sure
+        # update for next step
+        cp.x .= xᵏ
+    end
+    # cp.iter[:k] += 1
+    return xᵏ
+end
+function updateQN(cp::IQNCoupling2, x_new)
+    if cp.iter[:k]==0 # relaxation step
         # relax primary data
         r = x_new .- cp.x
-        cp.x .= x_new
-        cp.r .= r
+        # store new values
+        cp.x .= x_new; cp.r .= r
         x_new .+= cp.ω.*r
-        cp.iter[1] = 1 # triggers QN update
     else
-        k = cp.iter[1]; N = length(cp.x)
+        k = cp.iter[:k]; N = length(cp.x)
         # compute residuals
         r = x_new .- cp.x
         # roll the matrix to make space for new column
@@ -67,14 +93,14 @@ function updateQN(cp::IQNCoupling2, x_new, new_t)
         cp.V[:,1] = r .- cp.r;      cp.r .= r
         cp.W[:,1] = x_new .- cp.x;  cp.x .= x_new
         # preocndition system
-        Φᵏ=preconditonner(r,cp.subs,new_t); Vᵏ = Φᵏ*cp.V
+        Φᵏ=preconditonner(r,cp.subs,true); Vᵏ = Φᵏ*cp.V
         # Q1filter!(Vᵏ; ϵ=1e-8)
         # solve least-square problem with Housholder QR decomposition
         Qᵏ,Rᵏ = qr(@view Vᵏ[:,1:min(k,N)])
         cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*Φᵏ*r)
         x_new .+= (@view cp.W[:,1:min(k,N)])*cᵏ # .+ r # not sure
-        cp.iter[1] = k + 1
     end
+    # cp.iter[:k] += 1
     return x_new
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
@@ -153,7 +179,7 @@ body = DynamicBody(nurbs, (0,1));
 sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 0.10
+duration = 10.0
 step = 0.1
 t₀ = 0.0
 ωᵣ = 0.25 # ωᵣ ∈ [0,1] is the relaxation parameter
@@ -169,7 +195,7 @@ pnts_old = zero(u⁰); pnts_old .+= u⁰
 # relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
 # relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
 
-QNCouple = IQNCoupling2(pnts_old,f_old;relax=ωᵣ)
+QNCouple = IQNCoupling2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 
 # time loop
@@ -209,18 +235,20 @@ updated_values = zero(QNCouple.x)
             f_new = force(body,sim)
 
             # check that residuals have converged
-            rd = res(pnts_new,pnts_old); rf = res(f_new,f_old);
-            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
-            if ((rd<1e-3) && (rf<1e-3)) || iter > 20 # if we converge, we exit to avoid reverting the flow
+            rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
+            println("    Iter: ",iter,", rd: ",round(norm(pnts_old-pnts_new),digits=8),", rf: ",round(rf,digits=8))
+            if ((rd<1e-2) && (rf<1e-2)) || iter > 16 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
                 dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
                 break
             end
 
             # accelerate coupling
-            concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
-            updated_values = updateQN(QNCouple, updated_values, new)
+            concatenate!(updated_values, reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))', f_new, QNCouple.subs)
+            updated_values = updateQN(QNCouple, updated_values)
             revert!(updated_values, pnts_old, f_old, QNCouple.subs)
+            pnts_old .= u⁰ .+ pnts_old
+
             # pnts_old, f_old = accelerate(pnts_old, f_old, pnts_new, f_new, ωᵣ)
             # pnts_old, f_old = update(relax, [pnts_new...], [f_new...])
             # f_old, pnts_old = update(relax, [f_new...], [pnts_new...])

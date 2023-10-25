@@ -93,7 +93,7 @@ end
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
 # pop!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 # relative resudials
-res(a,b) = norm(a-b)/norm(b)
+res(xᵏ,xᵏ⁺¹) = norm(xᵏ-xᵏ⁺¹)/norm(xᵏ)
 
 
 

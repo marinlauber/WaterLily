@@ -66,7 +66,7 @@ preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
 function preconditionner!(P,r,subs,reset::Val{false})
     λᵏ = ones(length(r))
     for s in subs
-        λᵏ[s] .+= norm(r)/norm(r[s])
+        λᵏ[s] .= norm(r)/norm(r[s])
     end
     P .= Diagonal(λᵏ)
 end
@@ -92,19 +92,20 @@ function update(cp::IQNCoupling2, xᵏ, new_ts)
         cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
         cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
         # preocndition and filter system
-        # preconditionner!(cp.P,rᵏ,cp.subs,Val(true));
+        # preconditionner!(cp.P,rᵏ,cp.subs,Val(false))
+        Vᵏ = cp.V
         # Q1filter!(Vᵏ,cp.V,cp.W; ϵ=1e-8)
         # solve least-square problem with Housholder QR decomposition
-        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[:k],N)])
+        Qᵏ,Rᵏ = qr(@view Vᵏ[:,1:min(cp.iter[:k],N)])
         cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*rᵏ); cp.c[1:min(cp.iter[:k],N)] .= cᵏ
         prod = (@view cp.W[:,1:min(cp.iter[:k],N)])*cᵏ
         
         println(" xᵏ: ",norm(cp.x))
         println(" rᵏ: ",norm(rᵏ),"   W*cᵏ: ",norm(prod),"   W*cᵏ+rᵏ: ",norm(prod.+rᵏ),"  ω*rᵏ: ",norm(cp.ω*cp.r))
         # update for next step
-        # xᵏ.= cp.x .+ prod .+ rᵏ
-        println(" IQN xᵏ⁺¹: ",norm(cp.x .+ prod .+ rᵏ))
-        xᵏ .= cp.x .+ cp.ω*cp.r
+        xᵏ.= cp.x .+ prod .+ rᵏ
+        println(" xᵏ⁺¹(IQN): ",norm(cp.x .+ prod .+ rᵏ))
+        # xᵏ .= cp.x .+ cp.ω*cp.r
         cp.x .= xᵏ
     end
     cp.iter[:k] += 1
@@ -186,10 +187,10 @@ body = DynamicBody(nurbs, (0,1));
 sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 0.1
+duration = 10.0
 step = 0.1
 t₀ = 0.0
-ωᵣ = 1.0 # ωᵣ ∈ [0,1] is the relaxation parameter
+ωᵣ = 0.5 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(p)
@@ -199,11 +200,7 @@ f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
 # coupling
-# relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
-# relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
-
-QNCouple = IQNCoupling2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
-# QNCouple = Relaxation2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
+QNCouple = IQNCoupling2(f_old[:,1:8],f_old[:,9:end];relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 
 # time loop
@@ -233,30 +230,29 @@ updated_values = zero(QNCouple.x)
         # iterative loop
         while true
             
-            # update the structure
-            dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
-            pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
-            
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
             f_new = force(body,sim)
 
+            # update the structure
+            dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_new, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
+            pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
+
             # check that residuals have converged
             rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
-            println("    Iter: ",iter,", rd: ",round(norm(pnts_old-pnts_new),digits=8),", rf: ",round(rf,digits=8))
+            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
             if ((rd<1e-2) && (rf<1e-2)) || iter > 40 # if we converge, we exit to avoid reverting the flow
-                println("  Converged...")
+                println("  Converged...\n")
                 dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
                 f_old .= f_new; pnts_old .= pnts_new
                 break
             end
 
             # accelerate coupling
-            concatenate!(updated_values, reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))', f_new, QNCouple.subs)
+            concatenate!(updated_values, f_new[:,1:8], f_new[:,9:end], QNCouple.subs)
             updated_values = update(QNCouple, updated_values, iter==1)
-            revert!(updated_values, pnts_old, f_old, QNCouple.subs)
-            pnts_old .= u⁰ .+ pnts_old
+            revert!(updated_values, f_old[:,1:8], f_old[:,9:end], QNCouple.subs)
 
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
@@ -274,7 +270,7 @@ updated_values = zero(QNCouple.x)
     get_omega!(sim); plot_vorticity(sim.flow.σ', limit=10)
     # plot!(body.surf, show_cp=false)
     c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
-    plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)
+    plot!(getindex.(c,2),getindex.(c,1),linewidth=2,color=:black,yflip = true)
     plot!(title="tU/L $tᵢ")
     
 end

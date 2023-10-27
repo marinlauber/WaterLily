@@ -107,7 +107,7 @@ function update(cp::IQNCoupling2, xᵏ, new_ts)
         xᵏ .= cp.x .+ cp.ω*cp.r
         cp.x .= xᵏ
     end
-    cp.iter[:k] += 1
+    # cp.iter[:k] += 1
     return xᵏ
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
@@ -234,13 +234,16 @@ updated_values = zero(QNCouple.x)
         while true
             
             # update the structure
+            println(tⁿ, " ", tⁿ⁺¹)
+            display(Matrix(M))
             dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
             pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
-            
+            display(pnts_new)
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
             f_new = force(body,sim)
+            display(f_new)
 
             # check that residuals have converged
             rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);

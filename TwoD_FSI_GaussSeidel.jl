@@ -51,16 +51,16 @@ struct IQNCoupling2 <: WaterLily.AbstractCoupling
     end
 end
 function concatenate!(vec, a, b, subs)
-    vec[subs[1]] = a[1,:];
-    vec[subs[2]] = a[2,:];
-    vec[subs[3]] = b[1,:];
-    vec[subs[4]] = b[2,:];
+    vec[subs[1]] .= a[1,:];
+    vec[subs[2]] .= a[2,:];
+    vec[subs[3]] .= b[1,:];
+    vec[subs[4]] .= b[2,:];
 end
 function revert!(vec, a, b, subs)
-    a[1,:] = vec[subs[1]];
-    a[2,:] = vec[subs[2]];
-    b[1,:] = vec[subs[3]];
-    b[2,:] = vec[subs[4]];
+    a[1,:] .= vec[subs[1]];
+    a[2,:] .= vec[subs[2]];
+    b[1,:] .= vec[subs[3]];
+    b[2,:] .= vec[subs[4]];
 end
 preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
 function preconditionner!(P,r,subs,reset::Val{false})
@@ -187,7 +187,7 @@ body = DynamicBody(nurbs, (0,1));
 sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 
 # duration of the simulation
-duration = 10.0
+duration = 5.0
 step = 0.1
 t₀ = 0.0
 ωᵣ = 0.5 # ωᵣ ∈ [0,1] is the relaxation parameter
@@ -199,9 +199,11 @@ integration_points = Splines.uv_integration(p)
 f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
-# coupling
+# coupling, only forces here
 QNCouple = IQNCoupling2(f_old[:,1:8],f_old[:,9:end];relax=ωᵣ)
 updated_values = zero(QNCouple.x)
+
+counters = []
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -225,7 +227,7 @@ updated_values = zero(QNCouple.x)
         tⁿ⁺¹ = tⁿ + Δt;     # current time install
         
         # implicit solve
-        iter=1; new=true
+        iter=1; new=true; resid_log=[]
 
         # iterative loop
         while true
@@ -241,6 +243,7 @@ updated_values = zero(QNCouple.x)
 
             # check that residuals have converged
             rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
+            push!(resid_log,rf)
             println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
             if ((rd<1e-2) && (rf<1e-2)) || iter > 40 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...\n")
@@ -252,7 +255,7 @@ updated_values = zero(QNCouple.x)
             # accelerate coupling
             concatenate!(updated_values, f_new[:,1:8], f_new[:,9:end], QNCouple.subs)
             updated_values = update(QNCouple, updated_values, iter==1)
-            revert!(updated_values, f_old[:,1:8], f_old[:,9:end], QNCouple.subs)
+            revert!(updated_values, (@view f_old[:,1:8]), (@view f_old[:,9:end]), QNCouple.subs)
 
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
@@ -260,7 +263,7 @@ updated_values = zero(QNCouple.x)
             iter += 1
             new = false
         end
-
+        push!(counters,resid_log)
         # finish the time step
         Δt = sim.flow.Δt[end]
         t += Δt
@@ -270,7 +273,14 @@ updated_values = zero(QNCouple.x)
     get_omega!(sim); plot_vorticity(sim.flow.σ', limit=10)
     # plot!(body.surf, show_cp=false)
     c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
-    plot!(getindex.(c,2),getindex.(c,1),linewidth=2,color=:black,yflip = true)
+    plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)
     plot!(title="tU/L $tᵢ")
     
 end
+p = plot([40,40],[1e2,1e-8],color=:black,xaxis=:log10, yaxis=:log10,
+xlabel="Iteration", ylabel="Residual",
+xlim=(1,200), ylim=(1e-8,1e2),legend=:false)
+for i ∈ 1:length(counters)
+    plot!(p,counters[i].+1e-8)
+end
+p

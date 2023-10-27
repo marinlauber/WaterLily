@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<precice-configuration>
+  <log>
+    <sink
+      type="stream"
+      output="stdout"
+      filter="(%Severity% > debug) and not (%Rank% != 0)"
+      format="WaterLily-Splines:%ColorizedSeverity% %Message%"
+      enabled="true" />
+  </log>
+
+  <solver-interface dimensions="2">
+    <data:vector name="Forces"/>
+    <data:vector name="Displacements"/>
+
+    <mesh name="Nurbs-Mesh-Fluid">
+      <use-data name="Displacements"/>
+    </mesh>
+
+    <mesh name="Force-Mesh-Fluid">
+      <use-data name="Forces"/>
+    </mesh>
+
+    <mesh name="Nurbs-Mesh-Solid">
+      <use-data name="Displacements"/>
+    </mesh>
+
+    <mesh name="Force-Mesh-Solid">
+      <use-data name="Forces"/>
+    </mesh>
+
+    <participant name="Splines">
+      <use-mesh name="Nurbs-Mesh-Solid" provide="yes"/>
+      <use-mesh name="Force-Mesh-Solid" provide="yes" />
+      <write-data name="Displacements" mesh="Nurbs-Mesh-Solid"/>
+      <read-data  name="Forces" mesh="Force-Mesh-Solid"/>
+    </participant>
+
+    <participant name="WaterLily">
+      <use-mesh name="Nurbs-Mesh-Fluid" provide="yes"/>
+      <use-mesh name="Force-Mesh-Fluid" provide="yes"/>
+      <use-mesh name="Force-Mesh-Solid" from="Splines"/>
+      <use-mesh name="Nurbs-Mesh-Solid" from="Splines"/>
+      <write-data name="Forces" mesh="Force-Mesh-Fluid"/>
+      <read-data  name="Displacements" mesh="Nurbs-Mesh-Fluid"/>
+      <mapping:nearest-neighbor
+	      direction="write"
+	      from="Force-Mesh-Fluid" 
+        to="Force-Mesh-Solid"
+        constraint="conservative"
+        timing="initial"/>
+      <mapping:nearest-neighbor
+	      direction="read"
+	      from="Nurbs-Mesh-Solid" 
+       	to="Nurbs-Mesh-Fluid"
+	      constraint="consistent"
+        timing="initial"/>
+    </participant>
+
+    <m2n:sockets from="WaterLily" to="Splines" exchange-directory=".."/>
+
+    <coupling-scheme:parallel-implicit>
+      <participants first="WaterLily" second="Splines"/>
+      <max-time value="10.0" />
+      <time-window-size value="0.2" />
+      <max-iterations value="50" />
+      <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>
+      <exchange data="Forces"        mesh="Force-Mesh-Solid" from="WaterLily" to="Splines"   initialize="true"/>
+      <relative-convergence-measure limit="1e-2" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
+      <relative-convergence-measure limit="1e-2" data="Forces"        mesh="Force-Mesh-Solid"/>
+      <!-- <acceleration:constant> -->
+        <!-- <relaxation value="0.5"/> -->
+      <!-- </acceleration:constant> -->
+      <acceleration:IQN-ILS>
+        <data name="Displacements" mesh="Nurbs-Mesh-Solid" />
+        <data name="Forces"        mesh="Force-Mesh-Solid" />
+        <preconditioner type="residual-sum" />
+        <filter type="QR2" limit="1.2e-2" />
+        <initial-relaxation value="0.05" />
+        <max-used-iterations value="32" />
+        <time-windows-reused value="15" />
+      </acceleration:IQN-ILS>
+    </coupling-scheme:parallel-implicit>
+
+    <!-- <coupling-scheme:parallel-implicit>
+      <participants first="WaterLily" second="Splines"/>
+      <max-time value="1000.0" />
+      <time-window-size value="0.2"/>
+      <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>
+      <exchange data="Forces"        mesh="Force-Mesh-Solid" from="WaterLily" to="Splines"   initialize="true"/>
+      <max-iterations value="50"/>
+      <relative-convergence-measure limit="1e-4" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
+      <relative-convergence-measure limit="1e-4" data="Forces"        mesh="Force-Mesh-Solid"/>
+      <acceleration:IQN-ILS>
+        <data name="Displacements" mesh="Nurbs-Mesh-Solid" />
+        <data name="Forces" mesh="Force-Mesh-Solid" />
+        <preconditioner type="residual-sum" />
+        <filter type="QR2" limit="1.2e-2" />
+        <initial-relaxation value="0.05" />
+        <max-used-iterations value="100" />
+        <time-windows-reused value="15" />
+      </acceleration:IQN-ILS>
+    </coupling-scheme:parallel-implicit> -->
+
+  </solver-interface>
+</precice-configuration>

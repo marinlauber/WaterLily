@@ -47,7 +47,7 @@ createSolverInterface("Splines", "./precice-config.xml", 0, 1)
 
 dimensions = PreCICE.getDimensions()
 numberOfVertices = 3
-writeData = Matrix(mesh.controlPoints[1:2,:]')
+writeData = 0.0*Matrix(mesh.controlPoints[1:2,:]')
 
 # location of integration points
 integration_points = Splines.uv_integration(p)
@@ -113,7 +113,7 @@ let # setting local scope for dt outside of the while loop
         if PreCICE.isReadDataAvailable()
             # println("Splines: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
-            # display(readData)
+            display(readData)
         end
 
         # update the structure
@@ -123,6 +123,7 @@ let # setting local scope for dt outside of the while loop
         if PreCICE.isWriteDataRequired(dt)
             # println("Splnies: Writing data")
             writeData .= reshape(dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))
+            display(writeData)
             PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
         end
 

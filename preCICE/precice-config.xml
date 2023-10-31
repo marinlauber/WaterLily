@@ -4,7 +4,7 @@
     <sink
       type="stream"
       output="stdout"
-      filter="(%Severity% > debug) and not (%Rank% != 0)"
+      filter="(%Severity% >= debug) and not (%Rank% != 0)"
       format="WaterLily-Splines:%ColorizedSeverity% %Message%"
       enabled="true" />
   </log>
@@ -61,24 +61,24 @@
 
     <coupling-scheme:parallel-implicit>
       <participants first="WaterLily" second="Splines"/>
-      <max-time value="10.0" />
+      <max-time value="1.0" />
       <time-window-size value="0.2" />
       <max-iterations value="50" />
       <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>
       <exchange data="Forces"        mesh="Force-Mesh-Solid" from="WaterLily" to="Splines"   initialize="true"/>
       <relative-convergence-measure limit="1e-2" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
       <relative-convergence-measure limit="1e-2" data="Forces"        mesh="Force-Mesh-Solid"/>
-      <!-- <acceleration:constant> -->
-        <!-- <relaxation value="0.5"/> -->
-      <!-- </acceleration:constant> -->
+      <!-- <acceleration:constant>
+        <relaxation value="0.05"/>
+      </acceleration:constant> -->
       <acceleration:IQN-ILS>
         <data name="Displacements" mesh="Nurbs-Mesh-Solid" />
         <data name="Forces"        mesh="Force-Mesh-Solid" />
-        <preconditioner type="residual-sum" />
-        <filter type="QR2" limit="1.2e-2" />
         <initial-relaxation value="0.05" />
-        <max-used-iterations value="32" />
-        <time-windows-reused value="15" />
+        <max-used-iterations value="23" />
+        <time-windows-reused value="23" />
+        <preconditioner type="residual-sum" />
+        <filter type="QR2" limit="1.e-2" />
       </acceleration:IQN-ILS>
     </coupling-scheme:parallel-implicit>
 

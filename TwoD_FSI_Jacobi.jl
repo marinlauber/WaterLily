@@ -9,6 +9,30 @@ function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
 
+function write(a::AbstractArray, fname::String)
+    open(fname*".txt","w") do io
+        for row in eachrow(a)
+            println(io,row)
+        end
+     end
+end
+
+struct ResidualSum
+    λ :: AbstractArray{Float64}
+    Φ :: AbstractArray{Float64}
+    function ResidualSum(N)
+        new(zeros(N),Diagonal(ones(N)))
+    end
+end
+apply!(pr::ResidualSum,r,subs,reset::Val{true}) = pr.λ.=0;
+function apply!(pr::ResidualSum,r,svec,reset::Val{false})
+    for s in svec
+        println(" preconditioner scaling factor ",norm(r)/norm(r[s]))
+        pr.λ[s] .+= norm(r)/norm(r[s])
+    end
+    pr.Φ .= Diagonal(pr.λ)
+end
+
 
 struct Relaxation2 <: WaterLily.AbstractCoupling
     ω :: Float64                  # relaxation parameter
@@ -32,6 +56,7 @@ function update(cp::Relaxation2, xᵏ, reset)
     return xᵏ
 end
 
+
 struct IQNCoupling2 <: WaterLily.AbstractCoupling
     ω :: Float64                    # intial relaxation
     x :: AbstractArray{Float64}     # primary variable
@@ -40,14 +65,18 @@ struct IQNCoupling2 <: WaterLily.AbstractCoupling
     V :: AbstractArray{Float64}     # primary residual difference
     W :: AbstractArray{Float64}     # primary variable difference
     c :: AbstractArray{Float64}     # least-square coefficients
-    P :: AbstractArray{Float64}     # preconditionner
+    P :: ResidualSum                # preconditionner
     subs                            # sub residual indices
+    svec
     iter :: Dict{Symbol,Int64}      # iteration counter
     function IQNCoupling2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
         x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
-        new(relax,x⁰,zeros(N),zeros(N),zeros(N,N÷2),zeros(N,N÷2),zeros(N÷2),zeros(N,N),subs,Dict(:k=>0))
+        svec = (1:n₁*m₁,n₁*m₁+1:N)
+        new(relax,x⁰,zeros(N),zeros(N),zeros(N,N÷2),zeros(N,N÷2),zeros(N÷2),
+            ResidualSum(N),
+            subs,svec,Dict(:k=>0))
     end
 end
 function concatenate!(vec, a, b, subs)
@@ -62,18 +91,38 @@ function revert!(vec, a, b, subs)
     b[1,:] = vec[subs[3]];
     b[2,:] = vec[subs[4]];
 end
-preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
-function preconditionner!(P,r,subs,reset::Val{false})
-    λᵏ = ones(length(r))
-    for s in subs
-        λᵏ[s] .+= norm(r)/norm(r[s])
-    end
-    P .= Diagonal(λᵏ)
-end
+
+
+# preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
+# function preconditionner!(P,r,subs,reset::Val{false})
+#     λᵏ = ones(length(r))
+#     for s in subs
+#         λᵏ[s] .+= norm(r)/norm(r[s])
+#     end
+#     P .= Diagonal(λᵏ)
+# end
+
 function Q1filter!(A,B,C;ϵ=1e-8)
     N,_ = size(A); normA=norm(A)
     for i ∈ N:-1:1
         A[i,i]<ϵ*normA && popCol!(A,i) && popCol!(B,i) && popCol!(C,i);
+    end
+end
+function Q2filter(V,Q,R)
+    Rii = norm(V[:,1])
+    s = zeros(size(V,2))
+    for i ∈ 1:size(V,2)
+        v = V[:,i]
+        for j ∈ 1:i-1
+            rij = Q[:,j]*v
+            s[j] = rij
+            v .+= Q[:,j].*rij
+        end
+        if norm(v)<εf*norm(V[:,i])
+            # delete column i
+            popCol!(V,i); popCol!(Q,i); popCol!(R,i)
+        end
+        Rii = norm(_v); Q[:,i].=v./Rii
     end
 end
 function update(cp::IQNCoupling2, xᵏ, new_ts)
@@ -83,31 +132,33 @@ function update(cp::IQNCoupling2, xᵏ, new_ts)
         # relaxation update
         xᵏ .= cp.x .+ cp.ω*cp.r
         # store values
-        cp.x.=xᵏ
+        cp.x .= xᵏ
     else
         # residuals
-        rᵏ = xᵏ .- cp.x; N=length(cp.x)÷2
+        rᵏ = xᵏ .- cp.x; N=10 #length(cp.x)÷2
         # roll the matrix to make space for new column
         WaterLily.roll!(cp.V); WaterLily.roll!(cp.W)
         cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
         cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
         # preocndition and filter system
         # preconditionner!(cp.P,rᵏ,cp.subs,Val(true));
+        # apply!(cp.P,rᵏ,cp.svec,Val(cp.iter[:k]==1))
+        # Vᵏ = cp.P.Φ*cp.V
         # Q1filter!(Vᵏ,cp.V,cp.W; ϵ=1e-8)
         # solve least-square problem with Housholder QR decomposition
         Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[:k],N)])
         cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*rᵏ); cp.c[1:min(cp.iter[:k],N)] .= cᵏ
         prod = (@view cp.W[:,1:min(cp.iter[:k],N)])*cᵏ
         
-        println(" xᵏ: ",norm(cp.x))
-        println(" rᵏ: ",norm(rᵏ),"   W*cᵏ: ",norm(prod),"   W*cᵏ+rᵏ: ",norm(prod.+rᵏ),"  ω*rᵏ: ",norm(cp.ω*cp.r))
+        # println(" xᵏ: ",norm(cp.x))
+        # println(" rᵏ: ",norm(rᵏ),"   W*cᵏ: ",norm(prod),"   W*cᵏ+rᵏ: ",norm(prod.+rᵏ),"  ω*rᵏ: ",norm(cp.ω*cp.r))
         # update for next step
-        # xᵏ.= cp.x .+ prod .+ rᵏ
-        println(" IQN xᵏ⁺¹: ",norm(cp.x .+ prod .+ rᵏ))
-        xᵏ .= cp.x .+ cp.ω*cp.r
+        xᵏ.= cp.x .+ prod .+ rᵏ
+        # println(" IQN xᵏ⁺¹: ",norm(cp.x .+ prod .+ rᵏ))
+        # xᵏ .= cp.x .+ cp.ω*cp.r
         cp.x .= xᵏ
     end
-    # cp.iter[:k] += 1
+    cp.iter[:k] += 1
     return xᵏ
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
@@ -189,7 +240,7 @@ sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 duration = 0.1
 step = 0.1
 t₀ = 0.0
-ωᵣ = 1.0 # ωᵣ ∈ [0,1] is the relaxation parameter
+ωᵣ = 0.05 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(p)
@@ -207,14 +258,20 @@ QNCouple = IQNCoupling2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f
 updated_values = zero(QNCouple.x)
 
 # time loop
+tWindows = 1
+deBug = true
+sim.flow.Δt[end] = 0.2
+# step = 0.2/sim.L
+# duration = step
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
 
-    global dⁿ, vⁿ, aⁿ, f_old, pnts_old, updated_values;
+    global dⁿ, vⁿ, aⁿ, f_old, pnts_old, updated_values, tWindows;
 
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
+    
 
-    while t < tᵢ*sim.L/sim.U
+    while t < tᵢ#*sim.L/sim.U
         
         println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
@@ -223,6 +280,7 @@ updated_values = zero(QNCouple.x)
         cache = (dⁿ, vⁿ, aⁿ)
         
         # time steps
+        sim.flow.Δt[end] = 0.2
         Δt = sim.flow.Δt[end]/sim.L*sim.U
         tⁿ = t/sim.L*sim.U; # previous time instant
         tⁿ⁺¹ = tⁿ + Δt;     # current time install
@@ -232,23 +290,29 @@ updated_values = zero(QNCouple.x)
 
         # iterative loop
         while true
+
             
             # update the structure
-            println(tⁿ, " ", tⁿ⁺¹)
-            display(Matrix(M))
+            # println(tⁿ, " ", tⁿ⁺¹)
             dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
             pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
-            display(pnts_new)
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            sim.flow.Δt[end] = 0.2
             f_new = force(body,sim)
-            display(f_new)
+
+            # println("Fluid read write data")
+            # display((pnts_old.-u⁰)./L)
+            # display(f_new)
+            # println("Solid read write data")
+            # display(f_old)
+            # display((pnts_new.-u⁰)./L)
 
             # check that residuals have converged
             rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
-            println("    Iter: ",iter,", rd: ",round(norm(pnts_old-pnts_new),digits=8),", rf: ",round(rf,digits=8))
-            if ((rd<1e-2) && (rf<1e-2)) || iter > 40 # if we converge, we exit to avoid reverting the flow
+            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
+            if ((rd<1e-2) && (rf<1e-2)) || iter > 50 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
                 dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
                 f_old .= f_new; pnts_old .= pnts_new
@@ -261,15 +325,26 @@ updated_values = zero(QNCouple.x)
             revert!(updated_values, pnts_old, f_old, QNCouple.subs)
             pnts_old .= u⁰ .+ pnts_old
 
+            # if deBug
+            #     write(QNCouple.W,"W"*string(tWindows)*"_"*string(iter))
+            #     write(QNCouple.V,"V"*string(tWindows)*"_"*string(iter))
+            #     write(QNCouple.r,"r"*string(tWindows)*"_"*string(iter))
+            #     write(QNCouple.x,"x"*string(tWindows)*"_"*string(iter))
+            # end
+
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
             dⁿ, vⁿ, aⁿ = cache
             iter += 1
             new = false
+            # println()
+            # println()
+            # println()
         end
+        tWindows += 1
 
         # finish the time step
-        Δt = sim.flow.Δt[end]
+        # Δt = sim.flow.Δt[end]
         t += Δt
     end
 

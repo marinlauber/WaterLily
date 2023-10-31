@@ -110,8 +110,8 @@ let # setting local scope for dt outside of the while loop
         if PreCICE.isReadDataAvailable()
             # println("WaterLily: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_n, vertexIDs_n)
+            display(readData)
             readData .= u⁰' + readData.*L
-            # display(readData)
             ParametricBodies.update!(body,Matrix(readData'),dt)
         end
         
@@ -121,6 +121,7 @@ let # setting local scope for dt outside of the while loop
         if PreCICE.isWriteDataRequired(dt)
             # println("WaterLily: Writing data")
             writeData = force(body,sim)
+            display(writeData)
             PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
         end
         

@@ -1,14 +1,14 @@
-using LinearAlgebra
+using LinearAlgebra: norm, dot
 
-function myqr(A)
-    m, n = size(A)
+function myqr(V)
+    m, n = size(V)
     Q = zeros(m, n)
     R = zeros(n, n)
 
     for j in 1:n
-        v = A[:, j]
+        v = V[:, j]
         for i in 1:j-1
-            R[i, j] = dot(Q[:, i], A[:, j])
+            R[i, j] = dot(Q[:, i], V[:, j])
             v -= R[i, j] * Q[:, i]
         end
         R[j, j] = norm(v)
@@ -17,6 +17,103 @@ function myqr(A)
 
     return Q, R
 end
+
+mutable struct QRFactorization{T}
+    Q::Matrix{T}
+    R::Matrix{T}
+    cols::Int # how many are use actually
+    rows::Int
+end
+
+function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
+    QR = QRFactorization(zero(V), zero(V), 0, 0);
+    delIndices=[];
+    for i in 1:size(V,2)
+        inserted = insertColumn!(QR, QR.cols+1, V[:,i], singularityLimit)
+        if !inserted
+            push!(delIndices, i)
+        end
+    end
+    return QR.Q, QR.R, delIndices
+end
+
+function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singularityLimit::T) where T
+    println("Inserting column ", k, " of ", size(QR.Q, 2))
+    # copy to avoid overwriting
+    v = copy(vec)
+
+    if QR.cols == 0
+        QR.rows = length(v)
+    end
+    applyFilter = singularityLimit > zero(T)
+
+    # we add a column
+    QR.cols += 1
+
+    # orthogonalize v to columns of Q
+    u = zeros(T, QR.cols)
+    rho_orth = zero(T)
+    rho0 = zero(T)
+
+    if applyFilter
+        rho0 = norm(v)
+    end
+
+    # try to orthogonalize the new vector
+    err, rho_orth = orthogonalize(QR.Q, v, u, rho_orth, QR.cols-1)
+    
+    if rho_orth <= eps(T) || err < 0
+        println("The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic.")
+        QR.cols -= 1
+        return false
+    end
+
+    if applyFilter && (rho0 * singularityLimit > rho_orth)
+        println("Discarding column as it is filtered out by the QR2-filter: rho0 * eps > rho_orth: ", rho0 * singularityLimit, " > ", rho_orth)
+        QR.cols -= 1
+        return false
+    end
+
+    # populate new column and row with zeros, they exist, they are just not shown
+    QR.R[:, QR.cols] .= zeros(T)
+    QR.R[QR.cols, :] .= zeros(T)
+
+    # Shift columns to the right
+    for j in QR.cols - 1:-1:k
+        for i in 1:j
+            QR.R[i, j + 1] = QR.R[i, j]
+        end
+    end
+    # reset diagonal
+    for j in k + 1:QR.cols
+        QR.R[j, j] = zero(T)
+    end
+    
+    # add to the right
+    QR.Q[:, QR.cols] = v
+
+    # Maintain decomposition and orthogonalization by application of Givens rotations
+    for l in QR.cols-2:-1:k
+        s,g = computeReflector(u[l], u[l + 1])
+        Rr1 = QR.R[l, 1:QR.cols]
+        Rr2 = QR.R[l + 1, 1:QR.cols]
+        applyReflector!(s, g, l + 1, QR.cols, Rr1, Rr2)
+        QR.R[l, 1:QR.cols] = Rr1
+        QR.R[l + 1, 1:QR.cols] = Rr2
+        Qc1 = QR.Q[:, l]
+        Qc2 = QR.Q[:, l + 1]
+        applyReflector!(s, g, 1, QR.rows, Qc1, Qc2)
+        QR.Q[:, l] = Qc1
+        QR.Q[:, l + 1] = Qc2
+    end
+
+    for i in 1:k
+        QR.R[i, k] = u[i]
+    end
+
+    return true
+end
+
 
 function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVector{T}, rho::T, colNum::Int) where T
     null = false
@@ -76,90 +173,6 @@ function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVe
     return k, rho
 end
 
-mutable struct QRFactorization{T}
-    Q::Matrix{T}
-    R::Matrix{T}
-    cols::Int # how many are use actually
-    rows::Int
-end
-
-
-function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singularityLimit::T) where T
-    
-    # copy to avoid overwriting
-    v = copy(vec)
-
-    if QR.cols == 0
-        QR.rows = length(v)
-    end
-    applyFilter = singularityLimit > zero(T)
-
-    # we add a column
-    QR.cols += 1
-
-    # orthogonalize v to columns of Q
-    u = zeros(T, QR.cols)
-    rho_orth = zero(T)
-    rho0 = zero(T)
-
-    if applyFilter
-        rho0 = norm(v)
-    end
-
-    err, rho_orth = orthogonalize(QR.Q, v, u, rho_orth, QR.cols-1)
-    
-    if rho_orth <= eps(T) || err < 0
-        println("The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic.")
-        QR.cols -= 1
-        return false
-    end
-
-    if applyFilter && (rho0 * singularityLimit > rho_orth)
-        println("Discarding column as it is filtered out by the QR2-filter: rho0 * eps > rho_orth: ", rho0 * singularityLimit, " > ", rho_orth)
-        QR.cols -= 1
-        return false
-    end
-
-    # populate new column and row with zeros, they exist, they are just not shown
-    QR.R[:, QR.cols] .= zeros(T)
-    QR.R[QR.cols, :] .= zeros(T)
-
-    # Shift columns to the right
-    for j in QR.cols - 1:-1:k
-        for i in 1:j
-            QR.R[i, j + 1] = QR.R[i, j]
-        end
-    end
-    # reset diagonal
-    for j in k + 1:QR.cols
-        QR.R[j, j] = zero(T)
-    end
-    
-    # add to the right
-    QR.Q[:, QR.cols] = v
-
-    # Maintain decomposition and orthogonalization by application of Givens rotations
-    for l in QR.cols - 2:-1:k
-        s,g = computeReflector(u[l], u[l + 1])
-        Rr1 = QR.R[l, 1:QR.cols]
-        Rr2 = QR.R[l + 1, 1:QR.cols]
-        applyReflector!(s, g, l + 1, QR.cols, Rr1, Rr2)
-        QR.R[l, 1:QR.cols] = Rr1
-        QR.R[l + 1, 1:QR.cols] = Rr2
-        Qc1 = QR.Q[:, l]
-        Qc2 = QR.Q[:, l + 1]
-        applyReflector!(s, g, 1, QR.rows, Qc1, Qc2)
-        QR.Q[:, l] = Qc1
-        QR.Q[:, l + 1] = Qc2
-    end
-
-    for i in 1:k
-        QR.R[i, k] = u[i]
-    end
-
-    return true
-end
-
 function computeReflector(x::T, y::T) where T
     u = x
     v = y
@@ -188,32 +201,28 @@ function applyReflector!(sigma, gamma, k::Int, l::Int, p::Vector{T}, q::Vector{T
         q[j] = (t + u) * nu - v
     end
 end
+popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
+
 
 # Example usage:
-cols = 0
-rows = 0
-Q = zeros(10, 10)
-R = zeros(10, 10)
+V = rand(10,10); V[:,5] = V[:,1]
+Q,R,delIndices = QRFactorization(V,1e-6);
 
-qr_fact = QRFactorization(Q, R, cols, rows)
-singularityLimit = 0.0
-
-A = zeros(10,10)
-for i in 1:10
-    ve = (11-i)*rand(10)
-    A[:,i] .= ve
-    insertColumn!(qr_fact, i, ve, singularityLimit)
+# pop the column that are filtered out
+l = 0
+for k in sort(delIndices)
+    global l
+    popCol!(V,k+l); l-=1
 end
 
 println("Updated Matrix Q:")
-display(qr_fact.Q)
+display(Q)
 println("Updated Matrix R:")
-display(qr_fact.R)
-display(A ≈ qr_fact.Q*qr_fact.R)
+display(R)
+display(V ≈ Q*R)
 
-
-Q,R = myqr(A)
+Q_,R_ = myqr(V)
 println("Updated Matrix Q is correct:")
-display(qr_fact.Q ≈ Q)
+display(Q ≈ Q_)
 println("Updated Matrix R:")
-display(qr_fact.R ≈ R)
+display(R ≈ R_)

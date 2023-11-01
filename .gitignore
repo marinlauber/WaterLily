@@ -21,3 +21,9 @@ Manifest.toml
 # paraview
 *.vti
 *.pvd
+Manifest.toml
+/docs/build/
+.vscode/
+*.svg
+dev/
+old/

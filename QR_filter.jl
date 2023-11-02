@@ -37,6 +37,22 @@ function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
     return QR.Q, QR.R, delIndices
 end
 
+function apply!(QR::QRFactorization, V, W; singularityLimit::T=1e-6) where T
+    delIndices=[];
+    for i in axes(V,2)
+        # recomputing the QR factorization every time
+        inserted = insertColumn!(QR, QR.cols+1, V[:,i], singularityLimit)
+        if !inserted
+            push!(delIndices, i)
+        end
+    end
+    # pop the column that are filtered out, backward to avoid index shifting
+    for k in sort(delIndices,rev=true)
+        popCol!(V,k); popCol!(W,k);
+    end
+    return nothing
+end
+
 function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singularityLimit::T) where T
     println("Inserting column ", k, " of ", size(QR.Q, 2))
     # copy to avoid overwriting
@@ -60,7 +76,7 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
     end
 
     # try to orthogonalize the new vector
-    err, rho_orth = orthogonalize(QR.Q, v, u, rho_orth, QR.cols-1)
+    err, rho_orth = orthogonalize(QR.Q, v, u, QR.cols-1)
     
     if rho_orth <= eps(T) || err < 0
         println("The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic.")
@@ -115,14 +131,15 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
 end
 
 
-function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVector{T}, rho::T, colNum::Int) where T
+function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVector{T}, colNum::Int) where T
+    
     null = false
     termination = false
     k = 0
 
     r .= zeros(T)
     s = zeros(T, colNum)
-    rho = norm(v)  # Distributed l2norm
+    rho = norm(v)  # l2norm
     rho0 = rho; rho1 = rho
 
     while !termination
@@ -203,16 +220,13 @@ function applyReflector!(sigma, gamma, k::Int, l::Int, p::Vector{T}, q::Vector{T
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 
-
-# Example usage:
-V = rand(10,10); V[:,5] = V[:,1]
+# Example, make three column identical, i.e. they should be filtered out
+V = rand(10,10); V[:,5] = V[:,1] ; V[:,8] = V[:,1]
 Q,R,delIndices = QRFactorization(V,1e-6);
 
 # pop the column that are filtered out
-l = 0
-for k in sort(delIndices)
-    global l
-    popCol!(V,k+l); l-=1
+for k in sort(delIndices,rev=true)
+    popCol!(V,k); #popCol!(W,k);
 end
 
 println("Updated Matrix Q:")
@@ -226,3 +240,26 @@ println("Updated Matrix Q is correct:")
 display(Q ≈ Q_)
 println("Updated Matrix R:")
 display(R ≈ R_)
+
+
+struct ResidualSum
+    λ :: AbstractArray{Float64}
+    w :: AbstractArray{Float64}
+    iw :: AbstractArray{Float64}
+    function ResidualSum(N)
+        new(zeros(N),ones(N),ones(N))
+    end
+end
+# reset the summation
+apply!(pr::ResidualSum,r,svec,reset::Val{true}) = pr.λ .= 0;
+# update the summation
+function apply!(pr::ResidualSum,r,svec,reset::Val{false})
+    for s in svec
+        println(" preconditioner scaling factor ",norm(r)/norm(r[s]))
+        pr.λ[s] .+= norm(r[s])/norm(r)
+    end
+    pr.w .= 1.0./pr.λ
+    pr.iw .= pr.λ
+    return nothing
+end
+

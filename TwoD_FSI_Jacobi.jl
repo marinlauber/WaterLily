@@ -4,164 +4,162 @@ using Splines
 using StaticArrays
 using LinearAlgebra
 include("examples/TwoD_plots.jl")
+include("Coupling.jl")
 
 function force(b::DynamicBody,sim::Simulation)
     reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
 end
 
-function write(a::AbstractArray, fname::String)
-    open(fname*".txt","w") do io
-        for row in eachrow(a)
-            println(io,row)
-        end
-     end
-end
-
-struct ResidualSum
-    λ :: AbstractArray{Float64}
-    Φ :: AbstractArray{Float64}
-    function ResidualSum(N)
-        new(zeros(N),Diagonal(ones(N)))
-    end
-end
-apply!(pr::ResidualSum,r,subs,reset::Val{true}) = pr.λ.=0;
-function apply!(pr::ResidualSum,r,svec,reset::Val{false})
-    for s in svec
-        println(" preconditioner scaling factor ",norm(r)/norm(r[s]))
-        pr.λ[s] .+= norm(r)/norm(r[s])
-    end
-    pr.Φ .= Diagonal(pr.λ)
-end
-
-
-struct Relaxation2 <: WaterLily.AbstractCoupling
-    ω :: Float64                  # relaxation parameter
-    x :: AbstractArray{Float64}   # primary variable
-    r :: AbstractArray{Float64}   # primary variable
-    subs
-    function Relaxation2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
-        n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
-        subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
-        x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
-        new(relax,copy(x⁰),zero(x⁰),subs)
-    end
-end
-function update(cp::Relaxation2, xᵏ, reset) 
-    # store variable and residual
-    rᵏ = xᵏ .- cp.x
-    # relaxation updates
-    xᵏ .= cp.x .+ cp.ω*rᵏ
-    # xᵏ .= cp.x .- ((xᵏ.-cp.x)'*(rᵏ.-cp.r)/((rᵏ.-cp.r)'*(rᵏ.-cp.r)).-1.0)*rᵏ
-    cp.x .= xᵏ; cp.r .= rᵏ
-    return xᵏ
-end
-
-
-struct IQNCoupling2 <: WaterLily.AbstractCoupling
-    ω :: Float64                    # intial relaxation
-    x :: AbstractArray{Float64}     # primary variable
-    x̃ :: AbstractArray{Float64}     # old solver iter (not relaxed)
-    r :: AbstractArray{Float64}     # primary residual
-    V :: AbstractArray{Float64}     # primary residual difference
-    W :: AbstractArray{Float64}     # primary variable difference
-    c :: AbstractArray{Float64}     # least-square coefficients
-    P :: ResidualSum                # preconditionner
-    subs                            # sub residual indices
-    svec
-    iter :: Dict{Symbol,Int64}      # iteration counter
-    function IQNCoupling2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
-        n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
-        subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
-        x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
-        svec = (1:n₁*m₁,n₁*m₁+1:N)
-        new(relax,x⁰,zeros(N),zeros(N),zeros(N,N÷2),zeros(N,N÷2),zeros(N÷2),
-            ResidualSum(N),
-            subs,svec,Dict(:k=>0))
-    end
-end
-function concatenate!(vec, a, b, subs)
-    vec[subs[1]] = a[1,:];
-    vec[subs[2]] = a[2,:];
-    vec[subs[3]] = b[1,:];
-    vec[subs[4]] = b[2,:];
-end
-function revert!(vec, a, b, subs)
-    a[1,:] = vec[subs[1]];
-    a[2,:] = vec[subs[2]];
-    b[1,:] = vec[subs[3]];
-    b[2,:] = vec[subs[4]];
-end
-
-
-# preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
-# function preconditionner!(P,r,subs,reset::Val{false})
-#     λᵏ = ones(length(r))
-#     for s in subs
-#         λᵏ[s] .+= norm(r)/norm(r[s])
-#     end
-#     P .= Diagonal(λᵏ)
+# function write(a::AbstractArray, fname::String)
+#     open(fname*".txt","w") do io
+#         for row in eachrow(a)
+#             println(io,row)
+#         end
+#      end
 # end
 
-function Q1filter!(A,B,C;ϵ=1e-8)
-    N,_ = size(A); normA=norm(A)
-    for i ∈ N:-1:1
-        A[i,i]<ϵ*normA && popCol!(A,i) && popCol!(B,i) && popCol!(C,i);
-    end
-end
-function Q2filter(V,Q,R)
-    Rii = norm(V[:,1])
-    s = zeros(size(V,2))
-    for i ∈ 1:size(V,2)
-        v = V[:,i]
-        for j ∈ 1:i-1
-            rij = Q[:,j]*v
-            s[j] = rij
-            v .+= Q[:,j].*rij
-        end
-        if norm(v)<εf*norm(V[:,i])
-            # delete column i
-            popCol!(V,i); popCol!(Q,i); popCol!(R,i)
-        end
-        Rii = norm(_v); Q[:,i].=v./Rii
-    end
-end
-function update(cp::IQNCoupling2, xᵏ, new_ts)
-    if cp.iter[:k]==0
-        # compute residual and store variable
-        cp.r .= xᵏ .- cp.x; cp.x̃.=xᵏ
-        # relaxation update
-        xᵏ .= cp.x .+ cp.ω*cp.r
-        # store values
-        cp.x .= xᵏ
-    else
-        # residuals
-        rᵏ = xᵏ .- cp.x; N=10 #length(cp.x)÷2
-        # roll the matrix to make space for new column
-        WaterLily.roll!(cp.V); WaterLily.roll!(cp.W)
-        cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
-        cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
-        # preocndition and filter system
-        # preconditionner!(cp.P,rᵏ,cp.subs,Val(true));
-        # apply!(cp.P,rᵏ,cp.svec,Val(cp.iter[:k]==1))
-        # Vᵏ = cp.P.Φ*cp.V
-        # Q1filter!(Vᵏ,cp.V,cp.W; ϵ=1e-8)
-        # solve least-square problem with Housholder QR decomposition
-        Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[:k],N)])
-        cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*rᵏ); cp.c[1:min(cp.iter[:k],N)] .= cᵏ
-        prod = (@view cp.W[:,1:min(cp.iter[:k],N)])*cᵏ
+# struct ResidualSum
+#     λ :: AbstractArray{Float64}
+#     Φ :: AbstractArray{Float64}
+#     function ResidualSum(N)
+#         new(zeros(N),Diagonal(ones(N)))
+#     end
+# end
+# apply!(pr::ResidualSum,r,subs,reset::Val{true}) = pr.λ.=0;
+# function apply!(pr::ResidualSum,r,svec,reset::Val{false})
+#     for s in svec
+#         println(" preconditioner scaling factor ",norm(r)/norm(r[s]))
+#         pr.λ[s] .+= norm(r)/norm(r[s])
+#     end
+#     pr.Φ .= Diagonal(pr.λ)
+# end
+
+
+# struct Relaxation2 <: WaterLily.AbstractCoupling
+#     ω :: Float64                  # relaxation parameter
+#     x :: AbstractArray{Float64}   # primary variable
+#     r :: AbstractArray{Float64}   # primary variable
+#     subs
+#     function Relaxation2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
+#         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
+#         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
+#         x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
+#         new(relax,copy(x⁰),zero(x⁰),subs)
+#     end
+# end
+# function update(cp::Relaxation2, xᵏ, reset) 
+#     # store variable and residual
+#     rᵏ = xᵏ .- cp.x
+#     # relaxation updates
+#     xᵏ .= cp.x .+ cp.ω*rᵏ
+#     # xᵏ .= cp.x .- ((xᵏ.-cp.x)'*(rᵏ.-cp.r)/((rᵏ.-cp.r)'*(rᵏ.-cp.r)).-1.0)*rᵏ
+#     cp.x .= xᵏ; cp.r .= rᵏ
+#     return xᵏ
+# end
+
+
+# struct IQNCoupling2 <: WaterLily.AbstractCoupling
+#     ω :: Float64                    # intial relaxation
+#     x :: AbstractArray{Float64}     # primary variable
+#     x̃ :: AbstractArray{Float64}     # old solver iter (not relaxed)
+#     r :: AbstractArray{Float64}     # primary residual
+#     V :: AbstractArray{Float64}     # primary residual difference
+#     W :: AbstractArray{Float64}     # primary variable difference
+#     c :: AbstractArray{Float64}     # least-square coefficients
+#     P :: ResidualSum                # preconditionner
+#     subs                            # sub residual indices
+#     svec
+#     iter :: Dict{Symbol,Int64}      # iteration counter
+#     function IQNCoupling2(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
+#         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
+#         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
+#         x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
+#         svec = (1:n₁*m₁,n₁*m₁+1:N)
+#         new(relax,x⁰,zeros(N),zeros(N),zeros(N,N÷2),zeros(N,N÷2),zeros(N÷2),
+#             ResidualSum(N),
+#             subs,svec,Dict(:k=>0))
+#     end
+# end
+# function concatenate!(vec, a, b, subs)
+#     vec[subs[1]] = a[1,:];
+#     vec[subs[2]] = a[2,:];
+#     vec[subs[3]] = b[1,:];
+#     vec[subs[4]] = b[2,:];
+# end
+# function revert!(vec, a, b, subs)
+#     a[1,:] = vec[subs[1]];
+#     a[2,:] = vec[subs[2]];
+#     b[1,:] = vec[subs[3]];
+#     b[2,:] = vec[subs[4]];
+# end
+
+
+# # preconditionner!(P,r,subs,reset::Val{true}) = (P .= Diagonal(ones(length(r))));
+# # function preconditionner!(P,r,subs,reset::Val{false})
+# #     λᵏ = ones(length(r))
+# #     for s in subs
+# #         λᵏ[s] .+= norm(r)/norm(r[s])
+# #     end
+# #     P .= Diagonal(λᵏ)
+# # end
+
+# # function Q1filter!(A,B,C;ϵ=1e-8)
+# #     N,_ = size(A); normA=norm(A)
+# #     for i ∈ N:-1:1
+# #         A[i,i]<ϵ*normA && popCol!(A,i) && popCol!(B,i) && popCol!(C,i);
+# #     end
+# # end
+# # function Q2filter(V,Q,R)
+# #     Rii = norm(V[:,1])
+# #     s = zeros(size(V,2))
+# #     delIndices = []
+# #     for i ∈ 1:size(V,2)
+# #         v = V[:,i]
+# #         for j ∈ 1:i-1
+# #             rij = Q[:,j]*v
+# #             s[j] = rij
+# #             v .+= Q[:,j].*rij
+# #         end
+# #         Rii = norm(_v); Q[:,i].=v./Rii
+# #     end
+# # end
+# function update(cp::IQNCoupling2, xᵏ, new_ts)
+#     if cp.iter[:k]==0
+#         # compute residual and store variable
+#         cp.r .= xᵏ .- cp.x; cp.x̃.=xᵏ
+#         # relaxation update
+#         xᵏ .= cp.x .+ cp.ω*cp.r
+#         # store values
+#         cp.x .= xᵏ
+#     else
+#         # residuals
+#         rᵏ = xᵏ .- cp.x; N=10 #length(cp.x)÷2
+#         # roll the matrix to make space for new column
+#         WaterLily.roll!(cp.V); WaterLily.roll!(cp.W)
+#         cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
+#         cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
+#         # preocndition and filter system
+#         # preconditionner!(cp.P,rᵏ,cp.subs,Val(true));
+#         # apply!(cp.P,rᵏ,cp.svec,Val(cp.iter[:k]==1))
+#         # Vᵏ = cp.P.Φ*cp.V
+#         # Q1filter!(Vᵏ,cp.V,cp.W; ϵ=1e-8)
+#         # solve least-square problem with Housholder QR decomposition
+#         Qᵏ,Rᵏ = qr(@view cp.V[:,1:min(cp.iter[:k],N)])
+#         cᵏ = WaterLily.backsub(Rᵏ,-Qᵏ'*rᵏ); cp.c[1:min(cp.iter[:k],N)] .= cᵏ
+#         prod = (@view cp.W[:,1:min(cp.iter[:k],N)])*cᵏ
         
-        # println(" xᵏ: ",norm(cp.x))
-        # println(" rᵏ: ",norm(rᵏ),"   W*cᵏ: ",norm(prod),"   W*cᵏ+rᵏ: ",norm(prod.+rᵏ),"  ω*rᵏ: ",norm(cp.ω*cp.r))
-        # update for next step
-        xᵏ.= cp.x .+ prod .+ rᵏ
-        # println(" IQN xᵏ⁺¹: ",norm(cp.x .+ prod .+ rᵏ))
-        # xᵏ .= cp.x .+ cp.ω*cp.r
-        cp.x .= xᵏ
-    end
-    cp.iter[:k] += 1
-    return xᵏ
-end
-popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
+#         # println(" xᵏ: ",norm(cp.x))
+#         # println(" rᵏ: ",norm(rᵏ),"   W*cᵏ: ",norm(prod),"   W*cᵏ+rᵏ: ",norm(prod.+rᵏ),"  ω*rᵏ: ",norm(cp.ω*cp.r))
+#         # update for next step
+#         xᵏ.= cp.x .+ prod .+ rᵏ
+#         # println(" IQN xᵏ⁺¹: ",norm(cp.x .+ prod .+ rᵏ))
+#         # xᵏ .= cp.x .+ cp.ω*cp.r
+#         cp.x .= xᵏ
+#     end
+#     cp.iter[:k] += 1
+#     return xᵏ
+# end
+# popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 
 
 # Material properties and mesh
@@ -253,7 +251,7 @@ pnts_old = zero(u⁰); pnts_old .+= u⁰
 # relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
 # relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
 
-QNCouple = IQNCoupling2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
+QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
 # QNCouple = Relaxation2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 

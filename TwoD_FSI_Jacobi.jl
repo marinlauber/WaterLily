@@ -238,7 +238,7 @@ sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
 duration = 0.1
 step = 0.1
 t₀ = 0.0
-ωᵣ = 0.05 # ωᵣ ∈ [0,1] is the relaxation parameter
+ωᵣ = 0.5 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(p)
@@ -251,8 +251,8 @@ pnts_old = zero(u⁰); pnts_old .+= u⁰
 # relax = IQNCoupling([f_old...],[pnts_old...];relax=ωᵣ)
 # relax = Relaxation([pnts_old...],[f_old...];relax=ωᵣ)
 
-QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
-# QNCouple = Relaxation2(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
+# QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
+QNCouple = Relaxation(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 
 # time loop

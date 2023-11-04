@@ -3,30 +3,50 @@ using ParametricBodies
 using Splines
 using StaticArrays
 using LinearAlgebra
-using SparseArrays
 include("examples/TwoD_plots.jl")
+include("Coupling.jl")
 
-# relative resudials
-res(a,b) = norm(a-b)/norm(b)
+function force(b::DynamicBody,sim::Simulation)
+    reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
+end
+
+# overwrite the momentum function so that we get the correct BC
+@fastmath function WaterLily.mom_step!(a::Flow,b::AbstractPoisson)
+    a.u⁰ .= a.u; a.u .= 0
+    # predictor u → u'
+    WaterLily.conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U)
+    WaterLily.project!(a,b); BC2!(a.u,a.U)
+    # corrector u → u¹
+    WaterLily.conv_diff!(a.f,a.u,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U,2)
+    WaterLily.project!(a,b,2); a.u ./= 2; BC2!(a.u,a.U)
+    push!(a.Δt,WaterLily.CFL(a))
+end
+
+# BC function using the profile
+function BC2!(a,A,f=1)
+    N,n = WaterLily.size_u(a)
+    for j ∈ 1:n, i ∈ 1:n
+        if i==j # Normal direction, impose profile on inlet and outlet
+            for s ∈ (1,2,N[j])
+                @WaterLily.loop a[I,i] = f*A[i] over I ∈ WaterLily.slice(N,s,j)
+            end
+        else  # Tangential directions, interpolate ghost cell to no splip
+            @WaterLily.loop a[I,i] = -a[I+δ(j,I),i] over I ∈ WaterLily.slice(N,1,j)
+            @WaterLily.loop a[I,i] = -a[I-δ(j,I),i] over I ∈ WaterLily.slice(N,N[j],j)
+        end
+    end
+end
 
 # Material properties and mesh
 numElem=4
 degP=3
 ptLeft = 0.0
 ptRight = 1.0
-A = 0.1
-Ii = 1e-3
-E = 1000.0
-L = 1.0
-EI = E*Ii #1.0
-EA = E*A #10.0
-f(s) = [0.0,0.0] # s is curvilinear coordinate
-P = 3EI/2
-
-# natural frequencies
-ωₙ = 1.875; fhz = 0.125
-density(ξ) = 0.0*(ωₙ^2/2π)^2*(EI/(fhz^2*L^4))
-# println(ωₙ^2.0*√(EI/(density(0.5)*L^4))/(2π))
+EI = 4.0
+EA = 400000.0
+density(ξ) = 30
 
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
@@ -42,7 +62,7 @@ Neumann_BC = [
 ]
 
 # make a problem
-p = EulerBeam(EI, EA, f, mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
+p = EulerBeam(EI, EA, (x)->zeros(2), mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
 
 ## Time integration
 ρ∞ = 0.5; # spectral radius of the amplification matrix at infinitely large time step
@@ -66,8 +86,8 @@ vⁿ = zero(a0);
 aⁿ = zero(a0);
 
 ## Simulation parameters
-L=2^5
-Re=500
+L=2^4
+Re=10
 U=1
 ϵ=0.5
 thk=2ϵ+√2
@@ -76,90 +96,96 @@ thk=2ϵ+√2
 ParametricBodies.dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
-u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[1.5L,2L])
+u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[3L,3L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
-Body = DynamicBody(nurbs, (0,1));
-sim = Simulation((4L,6L),(0,U),L;U,ν=U*L/Re,body=Body,ϵ,T=Float64)
+body = DynamicBody(nurbs, (0,1));
 
-t₀ = round(sim_time(sim))
-duration = 1
-tstep = 0.1
+# make a simulation
+sim = Simulation((4L,6L), (0,U), L; ν=U*L/Re, body, T=Float64)
+
+# duration of the simulation
+duration = 5.0
+step = 0.1
+t₀ = 0.0
+ωᵣ = 0.8 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(p)
-f_old = zeros((2,length(integration_points)))
-pnts_old = copy(u⁰)
 
-# time loop
-anim = @animate for tᵢ in range(t₀,t₀+duration;step=tstep)
-    
-    global dⁿ, vⁿ, aⁿ,f_old,pnts_old;
+# intialise coupling
+f_old = force(body,sim); size_f = size(f_old)
+pnts_old = zero(u⁰); pnts_old .+= u⁰
+
+QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
+# QNCouple = Relaxation(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
+updated_values = zero(QNCouple.x)
+
+@time @gif for tᵢ in range(t₀,t₀+duration;step)
+
+    global dⁿ, vⁿ, aⁿ, f_old, pnts_old, updated_values, tWindows;
 
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
 
     while t < tᵢ*sim.L/sim.U
+        
+        println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
-        println("tᵢ=$tᵢ, t=$t, Δt=$(sim.flow.Δt[end])")
-        
-        # save the state
+        # save at start of iterations
         WaterLily.store!(sim.flow)
-        
-        # implicit solve
-        iter = 1; r₂ = 1.0;
-        # f_new=f_old; pnts_new=pnts_old;
+        cache = (dⁿ, vⁿ, aⁿ)
         
         # time steps
         Δt = sim.flow.Δt[end]/sim.L*sim.U
         tⁿ = t/sim.L*sim.U; # previous time instant
-        tⁿ⁺¹ = tⁿ + Δt; # current time instal
+        tⁿ⁺¹ = tⁿ + Δt;     # current time install
+        
+        # implicit solve
+        iter=1
 
-        while r₂ < 1e-3
-            println("residuals: ",rand()/iter^2)
+        # iterative loop
+        while true
 
-            # ωᵣ = 0.01
-            # # set initial values and relax
-            # pnts_old = u⁰+reshape(L*dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
-            # pnts_old = (1-ωᵣ)*pnts_old .+ ωᵣ*pnts_new
-            # # f_old = NurbsForce(body.surf,sim.flow.p,integration_pnts)
-            # f_old .= 0.0
-            # f_old[2,:] .= 2P*sin(2π*fhz*tⁿ)
-            # f_old = (1-ωᵣ)*f_old .+ ωᵣ*f_new
-            
-            
-            # step the structure in time
-            # dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step(jacob, stiff, Matrix(M), resid, fext, loading, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
-            # dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
-            # pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
-            
-            # update the body and the flow
-            # ParametricBodies.update!(Body,pnts_old,sim.flow.Δt[end])
+            # update the structure
+            dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
+            pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
+            # update flow
+            ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            # f_new = reduce(hcat,[ParametricBodies.NurbsForce(Body.surf,sim.flow.p,s) for s ∈ integration_points])
+            f_new = force(body,sim)
 
-            # # check that residuals have converged
-            # rd=res(pnts_new,pnts_old); rf=res(f_new,f_old);
-            # println("iter=",iter,", rd=",round(rd,digits=3),", rf=",round(rf,digits=3))
-
-            # if ((rd<1e-2) && (rf<1e-2))
-            if iter>3 # if we converge, we exit to avoid reverting the flow
-                println("Converged...moving to next time step")
+            # check that residuals have converged
+            rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
+            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
+            if ((rd<1e-2) && (rf<1e-2)) || iter > 50 # if we converge, we exit to avoid reverting the flow
+                println("  Converged...")
+                dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
+                f_old .= f_new; pnts_old .= pnts_new
                 break
             end
 
-            # if not converged, revert to last state
+            # accelerate coupling
+            concatenate!(updated_values, reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))', f_new, QNCouple.subs)
+            updated_values = update(QNCouple, updated_values, iter==1)
+            revert!(updated_values, pnts_old, f_old, QNCouple.subs)
+            pnts_old .= u⁰ .+ pnts_old
+
+            # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
+            dⁿ, vⁿ, aⁿ = cache
             iter += 1
         end
 
-        # finalize
+        # finish the time step
         t += sim.flow.Δt[end]
     end
-    
+
     println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
-    get_omega!(sim); plot_vorticity(sim.flow.σ, limit=10)
-    plot!(Body.surf)
+    get_omega!(sim); plot_vorticity(sim.flow.σ', limit=10)
+    c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
+    plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)
+    plot!(title="tU/L $tᵢ")
+    
 end
-gif(anim, "perpendicular_flap.gif"; fps=20)

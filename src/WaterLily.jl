@@ -26,6 +26,8 @@ include("Metrics.jl")
 # include("Coupling.jl")
 # export Relaxation, IQNCoupling, update, res
 
+abstract type AbstractSimulation end
+
 """
     Simulation(dims::NTuple, u_BC::NTuple, L::Number;
                U=norm2(u_BC), Δt=0.25, ν=0., ϵ=1,
@@ -50,7 +52,7 @@ Constructor for a WaterLily.jl simulation:
 
 See files in `examples` folder for examples.
 """
-struct Simulation
+struct Simulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
@@ -67,7 +69,7 @@ struct Simulation
     end
 end
 
-time(sim::Simulation) = time(sim.flow)
+time(sim::AbstractSimulation) = sum(sim.flow.Δt[1:end-1])
 """
     sim_time(sim::Simulation)
 
@@ -75,7 +77,7 @@ Return the current dimensionless time of the simulation `tU/L`
 where `t=sum(Δt)`, and `U`,`L` are the simulation velocity and length
 scales.
 """
-sim_time(sim::Simulation) = time(sim)*sim.U/sim.L
+sim_time(sim::AbstractSimulation) = time(sim)*sim.U/sim.L
 
 """
     sim_step!(sim::Simulation,t_end=sim(time)+Δt;max_steps=typemax(Int),remeasure=true,verbose=false)

@@ -1,5 +1,53 @@
 using LinearAlgebra: norm,dot
 
+struct CoupledSimulation <: AbstractSimulation
+    U :: Number # velocity scale
+    L :: Number # length scale
+    ϵ :: Number # kernel width
+    flow :: Flow
+    body :: AbstractBody
+    pois :: AbstractPoisson
+    stru
+    function Simulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number;
+                        Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1,
+                        uλ::Function=(i,x)->u_BC[i],
+                        body::AbstractBody=NoBody(),T=Float32,mem=Array) where N
+        flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem)
+        measure!(flow,body;ϵ)
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ))
+    end
+end
+function sim_step!(sim::CoupledSimulation,t_end;verbose=false,remeasure=true)
+    t = time(sim)
+    while t < t_end*sim.L/sim.U
+        store!(sim); iter=1
+        while iter < 50
+            # update structure
+            solve_step!(sim.struc,force,t,sim.flow.Δt[end])
+            # update flow
+            ParametricBodies.update!(sim.body,pnts,sim.flow.Δt[end])
+            measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            force=force(sim.body,sim); pnts=points(sim.struc)
+            # check convergence and accelerate
+            update!(sim.coupling,force,pnts,Val(iter==1)) && break
+            # revert if not convergend
+            revert!(sim); iter+=1
+        end
+        #update time
+        t += sim.flow.Δt[end]
+        verbose && println("tU/L=",round(t*sim.U/sim.L,digits=4),
+                           ", Δt=",round(sim.flow.Δt[end],digits=3))
+    end
+end
+function store(sim::CoupledSimulation)
+    sim.uˢ .= sim.flow.u; sim.pˢ .= sim.flow.p
+    sim.cache = sim.struc.d, sim.struc.v, sim.struc.a
+end
+function revert!(sim::CoupledSimulation)
+    sim.flow.u .= sim.uˢ; sim.flow.p .= sim.pˢ
+    sim.struc.d, sim.struc.v, sim.struc.a .= sim.cache
+end
+
 function backsub(A,b)
     n = size(A,2)
     x = zeros(n)

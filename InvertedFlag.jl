@@ -45,29 +45,8 @@ Neumann_BC = [
     Boundary1D("Neumann", ptRight, 0.0; comp=2)
 ]
 
-# make a problem
-p = EulerBeam(EI, EA, f, mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
-
-## Time integration
-ρ∞ = 0.5; # spectral radius of the amplification matrix at infinitely large time step
-αm = (2.0 - ρ∞)/(ρ∞ + 1.0);
-αf = 1.0/(1.0 + ρ∞)
-γ = 0.5 - αf + αm;
-β = 0.25*(1.0 - αf + αm)^2;
-# unconditional stability αm ≥ αf ≥ 1/2
-
-# unpack variables
-@unpack x, resid, jacob = p
-M = spzero(jacob)
-stiff = zeros(size(jacob))
-fext = zeros(size(resid))
-M = global_mass!(M, mesh, density, gauss_rule)
-
-# initialise
-a0 = zeros(size(resid))
-dⁿ = u₀ = zero(a0);
-vⁿ = zero(a0);
-aⁿ = zero(a0);
+# make a structure
+struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.5)
 
 ## Simulation parameters
 L=2^5
@@ -93,21 +72,21 @@ tstep = 0.1
 ωᵣ = 0.5
 
 # force function
-integration_points = Splines.uv_integration(p)
+integration_points = Splines.uv_integration(struc.op)
 
 # intialise coupling
 f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
 # set up coupling
-QNCouple = Relaxation(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
+QNCouple = Relaxation(reshape(struc.u[1][1:2mesh.numBasis],(mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
 # QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',0.0.*f_old;relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step=tstep)
     
-    global dⁿ, vⁿ, aⁿ, updated_values, f_old, pnts_old;
+    global updated_values, f_old, pnts_old;
 
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
@@ -116,7 +95,7 @@ updated_values = zero(QNCouple.x)
 
         # save at start of iterations
         WaterLily.store!(sim.flow)
-        cache = (dⁿ, vⁿ, aⁿ)
+        cache =  struc.u
         
         # time steps
         Δt = sim.flow.Δt[end]/sim.L*sim.U
@@ -127,9 +106,13 @@ updated_values = zero(QNCouple.x)
         iter = 1
         while true
 
-            dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old,
-                                             dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
-            pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2mesh.numBasis],(mesh.numBasis,2))'
+            # dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old,
+            #                                  dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
+            #  integrate one in time
+            solve_step!(struc, f_old, Δt)
+
+            # get the results
+            pnts_new = u⁰+L.*dⁿ(struc)
             
             # update the body
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
@@ -149,20 +132,21 @@ updated_values = zero(QNCouple.x)
             println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
             if ((rd<1e-2) && (rf<1e-2)) || iter+1 > 50 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
-                dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
                 f_old .= f_new; pnts_old .= pnts_new
                 break
             end
 
             # accelerate coupling
-            concatenate!(updated_values, reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))', f_new, QNCouple.subs)
+            concatenate!(updated_values, L.*dⁿ(struc), f_new, QNCouple.subs)
             updated_values = update(QNCouple, updated_values, iter==1)
             revert!(updated_values, pnts_old, f_old, QNCouple.subs)
             pnts_old .= u⁰ .+ pnts_old
 
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
-            dⁿ, vⁿ, aⁿ = cache
+            struc.u[1] .= cache[1]
+            struc.u[2] .= cache[2]
+            struc.u[3] .= cache[3]
             iter += 1
 
         end

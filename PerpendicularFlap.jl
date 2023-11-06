@@ -61,29 +61,8 @@ Neumann_BC = [
     Boundary1D("Neumann", ptRight, 0.0; comp=2)
 ]
 
-# make a problem
-p = EulerBeam(EI, EA, (x)->zeros(2), mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
-
-## Time integration
-ρ∞ = 0.5; # spectral radius of the amplification matrix at infinitely large time step
-αm = (2.0 - ρ∞)/(ρ∞ + 1.0);
-αf = 1.0/(1.0 + ρ∞)
-γ = 0.5 - αf + αm;
-β = 0.25*(1.0 - αf + αm)^2;
-# unconditional stability αm ≥ αf ≥ 1/2
-
-# unpack variables
-@unpack x, resid, jacob = p
-M = spzero(jacob)
-stiff = zeros(size(jacob))
-fext = zeros(size(resid)); loading = zeros(size(resid))
-M = global_mass!(M, mesh, density, gauss_rule)
-
-# initialise
-a0 = zeros(size(resid))
-dⁿ = u₀ = zero(a0);
-vⁿ = zero(a0);
-aⁿ = zero(a0);
+# make a structure
+struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.5)
 
 ## Simulation parameters
 L=2^4
@@ -112,19 +91,19 @@ t₀ = 0.0
 ωᵣ = 0.8 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
-integration_points = Splines.uv_integration(p)
+integration_points = Splines.uv_integration(struc.op)
 
 # intialise coupling
 f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰); pnts_old .+= u⁰
 
-QNCouple = IQNCoupling(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
-# QNCouple = Relaxation(reshape(dⁿ[1:2p.mesh.numBasis],(p.mesh.numBasis,2))',f_old;relax=ωᵣ)
+# QNCouple = Relaxation(L.*dⁿ(struc),f_old;relax=ωᵣ)
+QNCouple = IQNCoupling(L.*dⁿ(struc),f_old;relax=ωᵣ)
 updated_values = zero(QNCouple.x)
 
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
 
-    global dⁿ, vⁿ, aⁿ, f_old, pnts_old, updated_values, tWindows;
+    global f_old, pnts_old, updated_values;
 
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
@@ -135,7 +114,7 @@ updated_values = zero(QNCouple.x)
 
         # save at start of iterations
         WaterLily.store!(sim.flow)
-        cache = (dⁿ, vⁿ, aⁿ)
+        cache = (copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
         
         # time steps
         Δt = sim.flow.Δt[end]/sim.L*sim.U
@@ -148,9 +127,10 @@ updated_values = zero(QNCouple.x)
         # iterative loop
         while true
 
-            # update the structure
-            dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext, f_old, dⁿ, vⁿ, aⁿ, tⁿ, tⁿ⁺¹, αm, αf, β, γ, p)
-            pnts_new = u⁰+reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))'
+            #  integrate once in time
+            solve_step!(struc, f_old, Δt)
+            pnts_new = u⁰.+L*dⁿ(struc)
+            
             # update flow
             ParametricBodies.update!(body,pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
@@ -161,20 +141,21 @@ updated_values = zero(QNCouple.x)
             println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
             if ((rd<1e-2) && (rf<1e-2)) || iter > 50 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
-                dⁿ, vⁿ, aⁿ = dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹
                 f_old .= f_new; pnts_old .= pnts_new
                 break
             end
 
             # accelerate coupling
-            concatenate!(updated_values, reshape(L*dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))', f_new, QNCouple.subs)
+            concatenate!(updated_values, L.*dⁿ(struc), f_new, QNCouple.subs)
             updated_values = update(QNCouple, updated_values, iter==1)
             revert!(updated_values, pnts_old, f_old, QNCouple.subs)
             pnts_old .= u⁰ .+ pnts_old
 
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
-            dⁿ, vⁿ, aⁿ = cache
+            struc.u[1] .= cache[1]
+            struc.u[2] .= cache[2]
+            struc.u[3] .= cache[3]
             iter += 1
         end
 
@@ -187,5 +168,4 @@ updated_values = zero(QNCouple.x)
     c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
     plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)
     plot!(title="tU/L $tᵢ")
-    
 end

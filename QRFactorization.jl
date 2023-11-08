@@ -1,10 +1,10 @@
 using LinearAlgebra: norm,dot
-
+using Logging
 """
     Residual sum preconditionner
 """
 struct ResidualSum
-    λ :: AbstractArray{Float64}
+    residualSum :: AbstractArray{Float64}
     w :: AbstractArray{Float64}
     iw :: AbstractArray{Float64}
     function ResidualSum(N)
@@ -12,15 +12,22 @@ struct ResidualSum
     end
 end
 # reset the summation
-update!(pr::ResidualSum,r,svec,reset::Val{true}) = pr.λ .= 0;
+function update!(pr::ResidualSum,r,svec,reset::Val{true})
+    @debug "reset preconditioner scaling factor"
+    pr.residualSum .= 0;
+end
 # update the summation
 function update!(pr::ResidualSum,r,svec,reset::Val{false})
     for s in svec
-        println(" preconditioner scaling factor ",norm(r)/norm(r[s]))
-        pr.λ[s] .+= norm(r[s])/norm(r)
+        pr.residualSum[s] .+= norm(r[s])/norm(r)
     end
-    pr.w .= 1.0./pr.λ
-    pr.iw .= pr.λ
+    for s in svec
+        @debug "preconditioner scaling factor $(1.0/pr.residualSum[s][1])"
+        if pr.residualSum[s][1] ≠ 0.0
+            pr.w[s] .= 1.0./pr.residualSum[s]
+            pr.iw[s] .= pr.residualSum[s]
+        end
+    end
     return nothing
 end
 
@@ -46,11 +53,11 @@ function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
     return QR.Q, QR.R, delIndices
 end
 
-function apply!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-6) where T
-    delIndices=[];
+function apply!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2) where T
+    delIndices=[]; QR.cols = 0; QR.rows = 0;
+    _col = min(_col,size(V,2))
     for i in 1:_col
         # recomputing the QR factorization every time
-        # println("Inserting column ", i, " of ", size(QR.Q, 2)," with norm of Vⱼ: ", norm(V[:,i]))
         inserted = insertColumn!(QR, QR.cols+1, V[:,i], singularityLimit)
         if !inserted
             push!(delIndices, i)
@@ -88,13 +95,13 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
     err, rho_orth = orthogonalize(QR.Q, v, u, QR.cols-1)
     
     if rho_orth <= eps(T) || err < 0
-        # println("The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic.")
+        @debug "The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic."
         QR.cols -= 1
         return false
     end
 
     if applyFilter && (rho0 * singularityLimit > rho_orth)
-        # println("Discarding column as it is filtered out by the QR2-filter: rho0 * eps > rho_orth: ", rho0 * singularityLimit, " > ", rho_orth)
+        @debug "Discarding column as it is filtered out by the QR2-filter: rho0 * eps > rho_orth: $(rho0 * singularityLimit) > $rho_orth"
         QR.cols -= 1
         return false
     end
@@ -104,13 +111,13 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
     QR.R[QR.cols, :] .= zeros(T)
 
     # Shift columns to the right
-    for j in QR.cols - 1:-1:k
+    for j in QR.cols-1:-1:k
         for i in 1:j
             QR.R[i, j + 1] = QR.R[i, j]
         end
     end
     # reset diagonal
-    for j in k + 1:QR.cols
+    for j in k+1:QR.cols
         QR.R[j, j] = zero(T)
     end
     
@@ -169,14 +176,14 @@ function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVe
         k += 1
 
         if size(Q, 2) == colNum
-            # println("The least-squares system matrix is quadratic, i.e., the new column cannot be orthogonalized (and thus inserted) to the LS-system.\nOld columns need to be removed.")
+            @debug "The least-squares system matrix is quadratic, i.e., the new column cannot be orthogonalized (and thus inserted) to the LS-system.\nOld columns need to be removed."
             v .= zeros(T)
             rho = zero(T)
             return k, rho
         end
 
         if rho1 <= eps(T)
-            # println("The norm of v_orthogonal is almost zero, i.e., failed to orthogonalize column v; discard.")
+            @debug "The norm of v_orthogonal is almost zero, i.e., failed to orthogonalize column v; discard."
             null = true
             rho1 = one(T)
             termination = true
@@ -184,7 +191,7 @@ function orthogonalize(Q::AbstractMatrix{T}, v::AbstractVector{T}, r::AbstractVe
 
         if rho1 <= rho0 * norm_coefficients
             if k >= 4
-                # println("Matrix Q is not sufficiently orthogonal. Failed to reorthogonalize new column after 4 iterations. New column will be discarded. The least-squares system is very badly conditioned, and the quasi-Newton will most probably fail to converge.")
+                @debug "Matrix Q is not sufficiently orthogonal. Failed to reorthogonalize new column after 4 iterations. New column will be discarded. The least-squares system is very badly conditioned, and the quasi-Newton will most probably fail to converge."
                 return -1, rho1
             end
             rho0 = rho1
@@ -226,14 +233,23 @@ function applyReflector!(sigma, gamma, k::Int, l::Int, p::Vector{T}, q::Vector{T
         q[j] = (t + u) * nu - v
     end
 end
+# @benchmark backsub(R,-Q'*r)
+# BenchmarkTools.Trial: 408 samples with 1 evaluation.
+#  Range (min … max):   9.524 ms … 16.669 ms  ┊ GC (min … max):  0.00% … 27.83%
+#  Time  (median):     11.726 ms              ┊ GC (median):     0.00%
+#  Time  (mean ± σ):   12.259 ms ±  1.986 ms  ┊ GC (mean ± σ):  10.18% ± 11.28%
 
+#   ▆█ ▁▃           ▂█▇▂           ▄                 ▂           
+#   ██▅██▅▂▄▁▁▂▁▄▅█▃████▆▆▄▇▄▃▄▂▁▂▃█▇▄▆▄▄▂▂▃▁▂▃▁▆▄▂▇▆█▇▄▄▄▄▅▃▄▃ ▄
+#   9.52 ms         Histogram: frequency by time        16.2 ms <
+
+#  Memory estimate: 16.26 MiB, allocs estimate: 2053.
 function backsub(A,b)
     n = size(A,2)
     x = zeros(n)
     x[n] = b[n]/A[n,n]
     for i in n-1:-1:1
-        s = sum( A[i,j]*x[j] for j in i+1:n )
-        x[i] = ( b[i] - s ) / A[i,i]
+        x[i] = ( b[i] - sum(A[i,j]*x[j] for j in i+1:n)) / A[i,i]
     end
     return x
 end

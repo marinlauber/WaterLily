@@ -1,6 +1,21 @@
 using LinearAlgebra: norm,dot
 include("QRFactorization.jl")
 
+function writetxt(string, v::Vector{Float64})
+    open(string*".txt","w") do io
+        for i in 1:length(v)
+            println(io, v[i])
+        end
+    end
+end
+function writetxt(string, a::Matrix{Float64})
+    open(string*".txt","w") do io
+        for i in 1:size(a,1)
+            println(io, a[i,:])
+        end
+    end
+end
+
 # these are not really needed
 function concatenate!(vec, a, b, subs)
     vec[subs[1]] = a[1,:]; vec[subs[2]] = a[2,:];
@@ -82,6 +97,9 @@ function update(cp::Relaxation, xᵏ, reset)
     cp.x .= xᵏ; cp.r .= rᵏ
     return xᵏ
 end
+function finalize!(cp::Relaxation, xᵏ)
+    # do nothing
+end
 
 
 struct IQNCoupling <: AbstractCoupling
@@ -108,39 +126,68 @@ struct IQNCoupling <: AbstractCoupling
             subs,svec,Dict(:k=>0))
     end
 end
-function update(cp::IQNCoupling, xᵏ, new_ts)
+function update(cp::IQNCoupling, xᵏ, _firstIter)
+    Δx = zeros(size(cp.x))
     if cp.iter[:k]==0
         # compute residual and store variable
         cp.r .= xᵏ .- cp.x; cp.x̃.=xᵏ
         # relaxation update
+        Δx .= cp.ω*cp.r;
         xᵏ .= cp.x .+ cp.ω*cp.r
         # store values
         cp.x .= xᵏ
     else
         # residuals
         rᵏ = xᵏ .- cp.x;
-        # roll the matrix to make space for new column
-        roll!(cp.V); roll!(cp.W)
-        cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
-        cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
+        k = min(cp.iter[:k],cp.QR.cols) # defualt we do not insert a column
+        if !_firstIter # on a first iteration, we simply apply the relaxation
+            @debug "updating V and W matrix"
+            # roll the matrix to make space for new column
+            roll!(cp.V); roll!(cp.W)
+            cp.V[:,1] = rᵏ .- cp.r;
+            cp.W[:,1] = xᵏ .- cp.x̃
+            k = min(cp.iter[:k],cp.QR.cols+1)
+        end
+        cp.r .= rᵏ; cp.x̃ .= xᵏ # save old solver iter
         # residual sum preconditioner
-        # update!(cp.P,rᵏ,cp.svec,Val(new_ts))
-        cp.W .*= cp.P.w
-        # QR decomposition and filter columns
-        k = min(cp.iter[:k],size(cp.V,2))
-        apply!(cp.QR, cp.V, cp.W, k)
+        update!(cp.P,rᵏ,cp.svec,Val(false))
+        cp.V .*= cp.P.w
+        # recompute QR decomposition and filter columns
+        ε = _firstIter ? Float64(0.0) : 1e-2
+        @debug "updating QR factorization with ε=$ε and k=$k"
+        apply!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
         cp.V .*= cp.P.iw # revert scaling
         # solve least-square problem 
-        R = @view cp.QR.R[1:k,1:k]
-        Q = @view cp.QR.Q[:,1:k]
-        cᵏ = backsub(R,-Q'*(cp.P.w.*rᵏ)); cp.c[1:length(cᵏ)] .= cᵏ
-        Δx = (@view cp.W[:,1:length(cᵏ)])*cᵏ
+        R = @view cp.QR.R[1:cp.QR.cols,1:cp.QR.cols]
+        Q = @view cp.QR.Q[:,1:cp.QR.cols]
+        rᵏ .*= cp.P.w # apply preconditioer to the residuals
+        cᵏ = backsub(R,-Q'*rᵏ)
+        @debug "least-square coefficients: $cᵏ"
+        cp.c[1:length(cᵏ)] .= cᵏ
+        rᵏ .*= cp.P.iw # revert preconditioer to the residuals
+        Δx .= (@view cp.W[:,1:length(cᵏ)])*cᵏ
         # update for next step
         xᵏ.= cp.x .+ Δx .+ rᵏ; cp.x .= xᵏ
     end
     cp.iter[:k] += 1
     return xᵏ
 end
+function finalize!(cp::IQNCoupling, xᵏ)
+    # add the new contribution as it has not been made yet
+    rᵏ = xᵏ .- cp.x;
+    # roll the matrix to make space for new column
+    roll!(cp.V); roll!(cp.W)
+    cp.V[:,1] = rᵏ .- cp.r; cp.r .= rᵏ
+    cp.W[:,1] = xᵏ .- cp.x̃; cp.x̃ .= xᵏ # save old solver iter
+    # apply the residual sum preconditioner, without recalculating
+    cp.V .*= cp.P.w
+    # QR decomposition and filter columns
+    k = min(cp.iter[:k],cp.QR.cols+1)
+    apply!(cp.QR, cp.V, cp.W, k, singularityLimit=0.0)
+    cp.V .*= cp.P.iw # revert scaling
+    # reset the preconditionner
+    cp.P.residualSum .= 0;
+end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
-res(xᵏ,xᵏ⁺¹) = norm(xᵏ-xᵏ⁺¹)/norm(xᵏ)
+res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹)

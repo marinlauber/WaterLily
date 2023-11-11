@@ -145,7 +145,7 @@ function update(cp::IQNCoupling, xᵏ, _firstIter)
             # roll the matrix to make space for new column
             roll!(cp.V); roll!(cp.W)
             cp.V[:,1] = rᵏ .- cp.r;
-            cp.W[:,1] = xᵏ .- cp.x̃
+            cp.W[:,1] = xᵏ .- cp.x̃;
             k = min(cp.iter[:k],cp.QR.cols+1)
         end
         cp.r .= rᵏ; cp.x̃ .= xᵏ # save old solver iter
@@ -164,10 +164,12 @@ function update(cp::IQNCoupling, xᵏ, _firstIter)
         cᵏ = backsub(R,-Q'*rᵏ)
         @debug "least-square coefficients: $cᵏ"
         cp.c[1:length(cᵏ)] .= cᵏ
-        rᵏ .*= cp.P.iw # revert preconditioer to the residuals
+        # rᵏ .*= cp.P.iw # revert preconditioer to the residuals
         Δx .= (@view cp.W[:,1:length(cᵏ)])*cᵏ
         # update for next step
-        xᵏ.= cp.x .+ Δx .+ rᵏ; cp.x .= xᵏ
+        @debug "correction factor $Δx"
+        @debug "residuals         $(cp.r)"
+        xᵏ.= cp.x .+ Δx .+ cp.r; cp.x .= xᵏ
     end
     cp.iter[:k] += 1
     return xᵏ
@@ -190,4 +192,4 @@ function finalize!(cp::IQNCoupling, xᵏ)
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
-res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹)
+res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹.+eps())

@@ -85,6 +85,7 @@ body = DynamicBody(nurbs, (0,1));
 
 # make a simulation
 sim = Simulation((4L,6L), (0,U), L; ν=U*L/Re, body, T=Float64)
+sim.flow.Δt[end] = 0.2
 
 # duration of the simulation
 duration = 10.0
@@ -121,7 +122,6 @@ updated_values = zero(QNCouple.x)
         # time steps
         Δt = sim.flow.Δt[end]/sim.L*sim.U
         tⁿ = t/sim.L*sim.U; # previous time instant
-        tⁿ⁺¹ = tⁿ + Δt;     # current time install
         
         # implicit solve
         iter=1; firstIteration=true
@@ -136,12 +136,13 @@ updated_values = zero(QNCouple.x)
             # update flow, this requires scaling the displacements
             ParametricBodies.update!(body,u⁰.+L*pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            sim.flow.Δt[end] = 0.2
             f_new = force(body,sim)
 
             # check that residuals have converged
             rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
             println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
-            if ((rd<1e-2) && (rf<1e-2)) || iter > 50 # if we converge, we exit to avoid reverting the flow
+            if ((rd<1e-2) && (rf<1e-2)) || iter+1 > 50 # if we converge, we exit to avoid reverting the flow
                 println("  Converged...")
                 # if time step converged, reset coupling preconditionner
                 concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)

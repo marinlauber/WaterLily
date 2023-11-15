@@ -22,14 +22,9 @@ ptRight = 1.0
 L=1.0
 
 # parameters
-Ca = 0.35
-Mᵨ = 0.5
-nu = 0.0
-h = L/64
-E = Ca2Young(Ca, h, L, 1, 1, nu)
 EI = 0.35
-EA = 100.0
-density(ξ) = 5.0
+EA = 1000.0
+density(ξ) = 5
 
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
@@ -45,11 +40,11 @@ Neumann_BC = [
 ]
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.5)
+struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.0)
 
 ## Simulation parameters
-L=2^5
-Re=500
+L=2^4
+Re=200
 U=1
 ϵ=0.5
 thk=2ϵ+√2
@@ -58,16 +53,16 @@ thk=2ϵ+√2
 ParametricBodies.dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
-u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[2L,3L])
+u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:].*L.+[3L,5L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
 body = DynamicBody(nurbs, (0,1));
-sim = Simulation((8L,6L),(U,0),L;U,ν=U*L/Re,body,ϵ,T=Float64)
-sim.flow.Δt[end] = 0.2
+sim = Simulation((12L,10L),(U,0),L;U,ν=U*L/Re,body,ϵ,T=Float64)
+# sim.flow.Δt[end] = 0.1
 
 t₀ = round(sim_time(sim))
-duration =1.0
+duration =10.0
 tstep = 0.1
 ωᵣ = 0.05
 
@@ -79,12 +74,12 @@ f_old = force(body,sim); f_new = copy(f_old)
 pnts_old = zero(u⁰); pnts_new = copy(pnts_old)
 
 # set up coupling
-# QNCouple = Relaxation(dⁿ(struc),f_old;relax=1.0)
-QNCouple = IQNCoupling(dⁿ(struc),f_old;relax=ωᵣ)
+QNCouple = Relaxation(dⁿ(struc),f_old;relax=0.8)
+# QNCouple = IQNCoupling(dⁿ(struc),f_old;relax=ωᵣ,maxCol=6)
 updated_values = zero(QNCouple.x)
 
 # time loop
-@time for tᵢ in range(t₀,t₀+duration;step=tstep)
+@time @gif for tᵢ in range(t₀,t₀+duration;step=tstep)
     
     global f_old, pnts_old, pnts_new, f_new, updated_values;
 
@@ -111,57 +106,39 @@ updated_values = zero(QNCouple.x)
             solve_step!(struc, f_old, Δt)
 
             # get the results
-            pnts_new .= reshape(struc.u[1][1:2mesh.numBasis],(mesh.numBasis,2))'
+            pnts_new = dⁿ(struc)
 
             # update the body
             ParametricBodies.update!(body,u⁰+pnts_old.*L,sim.flow.Δt[end])
             
             # update the flow
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            sim.flow.Δt[end] = 0.2
+            # sim.flow.Δt[end] = 0.1
+            println(ParametricBodies.force(sim.body.surf,sim.flow.p)/ParametricBodies.integrate(sim.body.surf))
 
             # compute forces
-            f_new .= force(body,sim)
+            f_new .=force(body,sim)
             if tⁿ<=1.0
-                f_new[2,:] .= -1.0
+                f_new .= 0.0
             end
-            
-            # # check that residuals have converged
-            # rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
-            # println("    Iter: ",iter,", rd: ",round(rd,digits=12),", rf: ",round(rf,digits=12))
-            # if ((rd<1e-2) && (rf<1e-2)) || iter+1 > 4 # if we converge, we exit to avoid reverting the flow
-            #     println("  Converged...")
-            #     # if time step converged, reset coupling preconditionner
-            #     concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
-            #     finalize!(QNCouple, updated_values)
-            #     f_old .= f_new; pnts_old .= pnts_new
-            #     firstIteration = true
-            #     break
-            # end
-
-            #check convergence
-            # if firstIteration || norm_f==0.0
-            #     norm_f = norm(f_new-f_old)
-            # end
-            # if firstIteration || norm_d==0.0
-            #     norm_d = norm(pnts_new-pnts_old)
-            # end
+            if tⁿ>=1.0 && tⁿ<=2.0
+                f_new[2,:] .= -0.1
+            end
 
             converged_d = norm(pnts_new-pnts_old) <= norm(pnts_new) * 1e-2
             converged_f = norm(f_new-f_old) <= norm(f_new) * 1e-2
             converged = all([converged_d,converged_f])
 
-            println("iteration $iter")
-            println("relative two-norm diff of data Displacements = ",
+            println("iteration $iter relative two-norm diff of data Displacements = ",
             round(norm(pnts_new-pnts_old)/norm(pnts_new),digits=12),", limit = 1.00e-02, normalization = ",
             round(norm(pnts_old),digits=12),", conv = $converged_d")
-            println("relative two-norm diff of data        Forces = ",
+            println("            relative two-norm diff of data Forces = ",
             round(norm(f_new-f_old)/norm(f_new),digits=12),", limit = 1.00e-02, normalization = ",
             round(norm(f_new),digits=12),", conv = $converged_f")
 
             # update or finaliz
             concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
-            if converged || iter+1 > 10
+            if converged || iter+1 > 50
                 finalize!(QNCouple, updated_values)
                 f_old .= f_new; pnts_old .= pnts_new
                 converged = true
@@ -190,9 +167,9 @@ updated_values = zero(QNCouple.x)
         t += sim.flow.Δt[end]
     end
     
-    # println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
-    # # get_omega!(sim);plot_vorticity(sim.flow.σ, limit=10)
-    # flood(sim.flow.p[inside(sim.flow.p)], clims=(-1,1))
-    # plot!(body.surf)
-    # plot!(title="tU/L $tᵢ")
+    println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
+    # get_omega!(sim);plot_vorticity(sim.flow.σ, limit=10)
+    flood(sim.flow.p[inside(sim.flow.p)], clims=(-1,1))
+    plot!(body.surf)
+    plot!(title="tU/L $tᵢ")
 end

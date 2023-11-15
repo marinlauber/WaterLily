@@ -12,34 +12,34 @@ end
 
 # ENV["JULIA_DEBUG"] = Main
 
-# # overwrite the momentum function so that we get the correct BC
-# @fastmath function WaterLily.mom_step!(a::Flow,b::AbstractPoisson)
-#     a.u⁰ .= a.u; a.u .= 0
-#     # predictor u → u'
-#     WaterLily.conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
-#     WaterLily.BDIM!(a); BC2!(a.u,a.U)
-#     WaterLily.project!(a,b); BC2!(a.u,a.U)
-#     # corrector u → u¹
-#     WaterLily.conv_diff!(a.f,a.u,a.σ,ν=a.ν)
-#     WaterLily.BDIM!(a); BC2!(a.u,a.U,2)
-#     WaterLily.project!(a,b,2); a.u ./= 2; BC2!(a.u,a.U)
-#     push!(a.Δt,WaterLily.CFL(a))
-# end
+# overwrite the momentum function so that we get the correct BC
+@fastmath function WaterLily.mom_step!(a::Flow,b::AbstractPoisson)
+    a.u⁰ .= a.u; a.u .= 0
+    # predictor u → u'
+    WaterLily.conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U)
+    WaterLily.project!(a,b); BC2!(a.u,a.U)
+    # corrector u → u¹
+    WaterLily.conv_diff!(a.f,a.u,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U,2)
+    WaterLily.project!(a,b,2); a.u ./= 2; BC2!(a.u,a.U)
+    push!(a.Δt,WaterLily.CFL(a))
+end
 
-# # BC function using the profile
-# function BC2!(a,A,f=1)
-#     N,n = WaterLily.size_u(a)
-#     for j ∈ 1:n, i ∈ 1:n
-#         if i==j # Normal direction, impose profile on inlet and outlet
-#             for s ∈ (1,2,N[j])
-#                 @WaterLily.loop a[I,i] = f*A[i] over I ∈ WaterLily.slice(N,s,j)
-#             end
-#         else  # Tangential directions, interpolate ghost cell to no splip
-#             @WaterLily.loop a[I,i] = -a[I+δ(j,I),i] over I ∈ WaterLily.slice(N,1,j)
-#             @WaterLily.loop a[I,i] = -a[I-δ(j,I),i] over I ∈ WaterLily.slice(N,N[j],j)
-#         end
-#     end
-# end
+# BC function using the profile
+function BC2!(a,A,f=1)
+    N,n = WaterLily.size_u(a)
+    for j ∈ 1:n, i ∈ 1:n
+        if i==j # Normal direction, impose profile on inlet and outlet
+            for s ∈ (1,2,N[j])
+                @WaterLily.loop a[I,i] = f*A[i] over I ∈ WaterLily.slice(N,s,j)
+            end
+        else  # Tangential directions, interpolate ghost cell to no splip
+            @WaterLily.loop a[I,i] = -a[I+δ(j,I),i] over I ∈ WaterLily.slice(N,1,j)
+            @WaterLily.loop a[I,i] = -a[I-δ(j,I),i] over I ∈ WaterLily.slice(N,N[j],j)
+        end
+    end
+end
 
 # Material properties and mesh
 numElem=4
@@ -64,11 +64,11 @@ Neumann_BC = [
 ]
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.5)
+struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.0)
 
 ## Simulation parameters
 L=2^4
-Re=500
+Re=100
 U=1
 ϵ=0.5
 thk=2ϵ+√2
@@ -85,13 +85,13 @@ body = DynamicBody(nurbs, (0,1));
 
 # make a simulation
 sim = Simulation((4L,6L), (0,U), L; ν=U*L/Re, body, T=Float64)
-sim.flow.Δt[end] = 0.2
+# sim.flow.Δt[end] = 0.2
 
 # duration of the simulation
 duration = 10.0
 step = 0.1
 t₀ = 0.0
-ωᵣ = 0.05 # ωᵣ ∈ [0,1] is the relaxation parameter
+ωᵣ = 0.5 # ωᵣ ∈ [0,1] is the relaxation parameter
 
 # force functions
 integration_points = Splines.uv_integration(struc.op)
@@ -101,7 +101,7 @@ f_old = force(body,sim); size_f = size(f_old)
 pnts_old = zero(u⁰)
 
 # QNCouple = Relaxation(dⁿ(struc),f_old;relax=0.9)
-QNCouple = IQNCoupling(dⁿ(struc),f_old;relax=ωᵣ)
+QNCouple = IQNCoupling(dⁿ(struc),f_old;relax=ωᵣ,maxCol=4)
 updated_values = zero(QNCouple.x)
 
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -136,7 +136,7 @@ updated_values = zero(QNCouple.x)
             # update flow, this requires scaling the displacements
             ParametricBodies.update!(body,u⁰.+L*pnts_old,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            sim.flow.Δt[end] = 0.2
+            # sim.flow.Δt[end] = 0.2
             f_new = force(body,sim)
 
             # check that residuals have converged

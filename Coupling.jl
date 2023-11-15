@@ -115,15 +115,17 @@ struct IQNCoupling <: AbstractCoupling
     subs                            # sub residual indices
     svec
     iter :: Dict{Symbol,Int64}      # iteration counter
-    function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
+    when::AbstractArray{Int64}    # when the column was added to the QR
+    function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5,maxCol::Integer=200)
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
         x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
         svec = (1:n₁*m₁,n₁*m₁+1:N)
-        new(relax,x⁰,zeros(N),zeros(N),zeros(N,N÷2),zeros(N,N÷2),zeros(N÷2),
+        new(relax,x⁰,zeros(N),zeros(N),zeros(N,min(N÷2,maxCol)),zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol)),
             ResidualSum(N),
-            QRFactorization(zeros(N,N÷2),zeros(N÷2,N÷2),0,0),
-            subs,svec,Dict(:k=>0))
+            QRFactorization(zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol),min(N÷2,maxCol)),0,0),
+            subs,svec,Dict(:k=>0),
+            zeros(min(N÷2,maxCol)))
     end
 end
 function update(cp::IQNCoupling, xᵏ, _firstIter)

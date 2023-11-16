@@ -116,7 +116,8 @@ updated_values = zero(QNCouple.x)
         println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
         # save at start of iterations
-        WaterLily.store!(sim.flow)
+        WaterLily.store!(sim.flow);
+        ParametricBodies.store!(sim.body);
         cache = (copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
         
         # time steps
@@ -159,6 +160,7 @@ updated_values = zero(QNCouple.x)
         
             # if we have not converged, we must revert
             WaterLily.revert!(sim.flow)
+            ParametricBodies.revert!(sim.body);
             struc.u[1] .= cache[1]
             struc.u[2] .= cache[2]
             struc.u[3] .= cache[3]

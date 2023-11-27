@@ -44,6 +44,28 @@ function λ₂(I::CartesianIndex{3},u)
 end
 
 """
+    Qcriterion2(I::CartesianIndex{3},u)
+
+Q-criterion is a deformation tensor metric to identify vortex cores.
+Also see Jeong, J., & Hussain, F., doi:[10.1017/S0022112095000462](https://doi.org/10.1017/S0022112095000462)
+"""
+function Qcriterion(I::CartesianIndex{3},u)
+    J = @SMatrix [∂(i,j,I,u) for i ∈ 1:3, j ∈ 1:3]
+    S,Ω = (J+J')/2,(J-J')/2
+    ## -0.5*sum(eigvals(S^2+Ω^2)) # this is also possible, but 2x slower
+    0.5*(√(tr(Ω*Ω'))^2-√(tr(S*S'))^2)
+end
+
+"""
+    FMPM
+
+Force and moemtn parition method computation
+"""
+function fmpm()
+    # nothing yet
+end
+
+"""
     curl(i,I,u)
 
 Compute component `i` of ``𝛁×𝐮`` at the __edge__ of cell `I`.

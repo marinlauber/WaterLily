@@ -26,6 +26,8 @@ function revert!(vec, a, b, subs)
     b[1,:] = vec[subs[3]]; b[2,:] = vec[subs[4]];
 end
 
+abstract type AbstractCoupling end
+
 struct CoupledSimulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
@@ -33,29 +35,45 @@ struct CoupledSimulation <: AbstractSimulation
     flow :: Flow
     body :: AbstractBody
     pois :: AbstractPoisson
-    stru
-    function Simulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number;
-                        Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1,
-                        uλ::Function=(i,x)->u_BC[i],
-                        body::AbstractBody=NoBody(),T=Float32,mem=Array) where N
+    struc 
+    cpl :: AbstractCoupling
+    # storage for iterations
+    uˢ :: AbstractArray
+    pˢ :: AbstractArray
+    dˢ :: AbstractArray
+    vˢ :: AbstractArray
+    aˢ :: AbstractArray
+    xˢ :: AbstractArray
+    ẋˢ :: AbstractArray
+    function CoupledSimulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number, body, struc, coupling;
+                               Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1,
+                               uλ::Function=(i,x)->u_BC[i],T=Float32,mem=Array) where N
         flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem)
         measure!(flow,body;ϵ)
-        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ))
+        new(U,L,ϵ,flow,body,)
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ),struc,coupling,
+            zeros(size(flow.u)),zeros(size(flow.p)),
+            zeros(size(struc.u[1])),
+            zeros(size(struc.u[2])),
+            zeros(size(struc.u[3])),
+            zeros(size(body.surf.pnts)),
+            zeros(size(body.velocity.pnts)))
     end
 end
 function sim_step!(sim::CoupledSimulation,t_end;verbose=false,remeasure=true)
-    t = time(sim)
+    t = sim_time(sim)
     while t < t_end*sim.L/sim.U
         store!(sim); iter=1
         while iter < 50
             # update structure
-            solve_step!(sim.struc,force,sim.flow.Δt[end])
-            # update flow
+            solve_step!(sim.struc,forces,sim.flow.Δt[end]/sim.L)
+            # update body
             ParametricBodies.update!(sim.body,pnts,sim.flow.Δt[end])
+            # update flow
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            force=force(sim.body,sim); pnts=points(sim.struc)
             # check convergence and accelerate
-            update!(sim.coupling,force,pnts,Val(iter==1)) && break
+            forces=force(sim.body,sim.flow); pnts=points(sim.struc)
+            update!(sim.coupling,forces,pnts,Val(iter==1)) && break
             # revert if not convergend
             revert!(sim); iter+=1
         end
@@ -65,16 +83,35 @@ function sim_step!(sim::CoupledSimulation,t_end;verbose=false,remeasure=true)
                            ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
-function store(sim::CoupledSimulation)
-    sim.uˢ .= sim.flow.u; sim.pˢ .= sim.flow.p
-    # sim.cache = sim.struc.d, sim.struc.v, sim.struc.a
+# function update!(cp::AbstractCoupling,primary,secondary,kwargs)
+#     # accelerate coupling
+#     updated_values = zeros(cpl.subs[1][1],cpl.subs[end][end])
+#     concatenate!(updated_values,primary,secondary,cp.subs)
+#     res_comb = res(updated_values,cpl.x)
+#     println("    r₂: ",res_comb, " converged: : ",res_comb<1e-2)
+#     converged = update!(cpl,updated_values,kwargs)
+#     revert!(updated_values,primary,secondary,cpl.subs)
+#     return converged
+# end
+function store!(sim::CoupledSimulation)
+    sim.uˢ .= sim.flow.u;
+    sim.pˢ .= sim.flow.p;
+    sim.dˢ .= sim.struc.u[1];
+    sim.vˢ .= sim.struc.u[2]
+    sim.aˢ .= sim.struc.u[3];
+    sim.xˢ .= sim.body.surf.pnts;
+    sim.ẋˢ .= sim.body.velocity.pnts;
 end
 function revert!(sim::CoupledSimulation)
-    sim.flow.u .= sim.uˢ; sim.flow.p .= sim.pˢ
-    # sim.struc.d, sim.struc.v, sim.struc.a .= sim.cache
+    sim.flow.u .= sim.uˢ;
+    sim.flow.p .= sim.pˢ;
+    pop!(sim.flow.Δt)
+    sim.struc.u[1] .= sim.dˢ;
+    sim.struc.u[2] .= sim.vˢ;
+    sim.struc.u[3] .= sim.aˢ;
+    sim.body.surf.pnts .= sim.xˢ;
+    sim.body.velocity.pnts .= sim.ẋˢ;
 end
-
-abstract type AbstractCoupling end
 
 struct Relaxation <: AbstractCoupling
     ω :: Float64                  # relaxation parameter
@@ -97,6 +134,15 @@ function update(cp::Relaxation, xᵏ, reset)
     cp.x .= xᵏ; cp.r .= rᵏ
     return xᵏ
 end
+function update!(cp::Relaxation, xᵏ, kwarg)
+    # check convergence
+    res(cp.x, xᵏ)<1e-2 && return true
+    # store variable and residual
+    cp.r .= xᵏ .- cp.x
+    # relaxation updates
+    xᵏ .= cp.x .+ cp.ω*cp.r; cp.x .= xᵏ
+    return false
+end
 function finalize!(cp::Relaxation, xᵏ)
     # do nothing
 end
@@ -115,7 +161,6 @@ struct IQNCoupling <: AbstractCoupling
     subs                            # sub residual indices
     svec
     iter :: Dict{Symbol,Int64}      # iteration counter
-    when::AbstractArray{Int64}    # when the column was added to the QR
     function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5,maxCol::Integer=200)
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
@@ -124,8 +169,7 @@ struct IQNCoupling <: AbstractCoupling
         new(relax,x⁰,zeros(N),zeros(N),zeros(N,min(N÷2,maxCol)),zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol)),
             ResidualSum(N),
             QRFactorization(zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol),min(N÷2,maxCol)),0,0),
-            subs,svec,Dict(:k=>0),
-            zeros(min(N÷2,maxCol)))
+            subs,svec,Dict(:k=>0,:first=>1))
     end
 end
 function update(cp::IQNCoupling, xᵏ, _firstIter)
@@ -152,12 +196,12 @@ function update(cp::IQNCoupling, xᵏ, _firstIter)
         end
         cp.r .= rᵏ; cp.x̃ .= xᵏ # save old solver iter
         # residual sum preconditioner
-        update!(cp.P,rᵏ,cp.svec,Val(false))
+        update_P!(cp.P,rᵏ,cp.svec,Val(false))
         cp.V .*= cp.P.w
         # recompute QR decomposition and filter columns
         ε = _firstIter ? Float64(0.0) : 1e-2
         @debug "updating QR factorization with ε=$ε and k=$k"
-        apply!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
+        apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
         cp.V .*= cp.P.iw # revert scaling
         # solve least-square problem 
         R = @view cp.QR.R[1:cp.QR.cols,1:cp.QR.cols]
@@ -176,6 +220,63 @@ function update(cp::IQNCoupling, xᵏ, _firstIter)
     cp.iter[:k] += 1
     return xᵏ
 end
+function update_VW!(cp,x,r)
+    roll!(cp.V); roll!(cp.W)
+    cp.V[:,1] = r .- cp.r;
+    cp.W[:,1] = x .- cp.x̃;
+    min(cp.iter[:k],cp.QR.cols+1)
+end
+function update!(cp::IQNCoupling, xᵏ, kwarg)
+    # compute the residuals
+    rᵏ = xᵏ .- cp.x;
+    # check convergence, if converged add this to the QR
+    if res(cp.x, xᵏ)<1e-2
+       # update V and W matrix
+        k = update_VW!(cp,xᵏ,rᵏ)
+        # apply the residual sum preconditioner, without recalculating
+        cp.V .*= cp.P.w
+        # QR decomposition and filter columns
+        apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=0.0)
+        cp.V .*= cp.P.iw # revert scaling
+        # reset the preconditionner
+        cp.P.residualSum .= 0; cp.iter[:first]=1
+        return true
+    end
+    # first step is relaxation
+    if cp.iter[:k]==0
+        # compute residual and store variable
+        cp.r .= rᵏ; cp.x̃.=xᵏ
+        # relaxation update
+        xᵏ .= cp.x .+ cp.ω*cp.r; cp.x .= xᵏ
+    else
+        k = min(cp.iter[:k],cp.QR.cols) # default we do not insert a column
+        if !Bool(cp.iter[:first]) # on a first iteration, we simply apply the relaxation
+            @debug "updating V and W matrix"
+            k = update_VW!(cp,xᵏ,rᵏ)
+        end
+        cp.r .= rᵏ; cp.x̃ .= xᵏ # save old solver iter
+        # residual sum preconditioner
+        update_P!(cp.P,rᵏ,cp.svec,Val(false))
+        # apply precondiotnner
+        cp.V .*= cp.P.w;
+        # recompute QR decomposition and filter columns
+        ε = Bool(cp.iter[:first]) ? Float64(0.0) : 1e-2
+        @debug "updating QR factorization with ε=$ε and k=$k"
+        apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
+        cp.V .*= cp.P.iw # revert scaling
+        # solve least-square problem 
+        R = @view cp.QR.R[1:cp.QR.cols,1:cp.QR.cols]
+        Q = @view cp.QR.Q[:,1:cp.QR.cols]
+        rᵏ .*= cp.P.w # apply preconditioer to the residuals
+        # compute coefficients
+        cᵏ = backsub(R,-Q'*rᵏ); cp.c[1:length(cᵏ)] .= cᵏ
+        @debug "least-square coefficients: $cᵏ"
+        # update for next step
+        xᵏ .= cp.x .+ (@view cp.W[:,1:length(cᵏ)])*cᵏ .+ cp.r; cp.x .= xᵏ
+    end
+    cp.iter[:k]+=1; cp.iter[:first]=0
+    return false
+end
 function finalize!(cp::IQNCoupling, xᵏ)
     # add the new contribution as it has not been made yet
     rᵏ = xᵏ .- cp.x;
@@ -187,11 +288,14 @@ function finalize!(cp::IQNCoupling, xᵏ)
     cp.V .*= cp.P.w
     # QR decomposition and filter columns
     k = min(cp.iter[:k],cp.QR.cols+1)
-    apply!(cp.QR, cp.V, cp.W, k, singularityLimit=0.0)
+    apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=0.0)
     cp.V .*= cp.P.iw # revert scaling
     # reset the preconditionner
     cp.P.residualSum .= 0;
 end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
+"""
+    relative residual norm
+"""
 res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹.+eps())

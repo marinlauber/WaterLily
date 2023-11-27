@@ -12,12 +12,12 @@ struct ResidualSum
     end
 end
 # reset the summation
-function update!(pr::ResidualSum,r,svec,reset::Val{true})
+function update_P!(pr::ResidualSum,r,svec,reset::Val{true})
     @debug "reset preconditioner scaling factor"
     pr.residualSum .= 0;
 end
 # update the summation
-function update!(pr::ResidualSum,r,svec,reset::Val{false})
+function update_P!(pr::ResidualSum,r,svec,reset::Val{false})
     for s in svec
         pr.residualSum[s] .+= norm(r[s])/norm(r)
     end
@@ -53,7 +53,7 @@ function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
     return QR.Q, QR.R, delIndices
 end
 
-function apply!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2) where T
+function apply_QR!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2) where T
     delIndices=[]; QR.cols = 0; QR.rows = 0;
     _col = min(_col,size(V,2))
     for i in 1:_col

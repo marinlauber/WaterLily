@@ -6,8 +6,8 @@ using LinearAlgebra
 include("examples/TwoD_plots.jl")
 include("Coupling.jl")
 
-function force(b::DynamicBody,sim::Simulation)
-    reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
+function force(b::DynamicBody,flow::Flow)
+    reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])
 end
 
 # ENV["JULIA_DEBUG"] = Main
@@ -64,7 +64,9 @@ Neumann_BC = [
 ]
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.0)
+struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, 
+                         Dirichlet_BC, Neumann_BC; ρ=density);
+                         ρ∞=0.0)
 
 ## Simulation parameters
 L=2^4
@@ -74,105 +76,32 @@ U=1
 thk=2ϵ+√2
 
 # overload the distance function
-ParametricBodies.dis(p,n) = √(p'*p) - thk/2
+dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
 u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[3L,3L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
-body = DynamicBody(nurbs, (0,1));
+body = DynamicBody(nurbs, (0,1); dist=dis);
+
+# force function
+integration_points = uv_integration(struc.op)
 
 # make a simulation
-sim = Simulation((4L,6L), (0,U), L; ν=U*L/Re, body, T=Float64)
-# sim.flow.Δt[end] = 0.2
+sim = CoupledSimulation((4L,6L),(0,U),L,body,struc,IQNCoupling;
+                         ν=U*L/Re,ϵ,ωᵣ=0.5,maxCol=6,T=Float64)
 
 # duration of the simulation
-duration = 10.0
-step = 0.1
-t₀ = 0.0
-ωᵣ = 0.5 # ωᵣ ∈ [0,1] is the relaxation parameter
+t₀ = 0.0; duration = 10.0; step = 0.1
 
-# force functions
-integration_points = Splines.uv_integration(struc.op)
-
-# intialise coupling
-f_old = force(body,sim); size_f = size(f_old)
-pnts_old = zero(u⁰)
-
-# QNCouple = Relaxation(dⁿ(struc),f_old;relax=0.9)
-QNCouple = IQNCoupling(dⁿ(struc),f_old;relax=ωᵣ,maxCol=4)
-updated_values = zero(QNCouple.x)
-
+# time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
 
-    global f_old, pnts_old, updated_values;
+    # integrate up to time tᵢ
+    sim_step!(sim,tᵢ)
 
-    # update until time tᵢ in the background
-    t = sum(sim.flow.Δt[1:end-1])
-
-    while t < tᵢ*sim.L/sim.U
-        
-        println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
-
-        # save at start of iterations
-        WaterLily.store!(sim.flow);
-        ParametricBodies.store!(sim.body);
-        cache = (copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
-        
-        # time steps
-        Δt = sim.flow.Δt[end]/sim.L*sim.U
-        tⁿ = t/sim.L*sim.U; # previous time instant
-        
-        # implicit solve
-        iter=1; firstIteration=true
-
-        # iterative loop
-        while true
-
-            #  integrate once in time
-            solve_step!(struc, f_old, Δt)
-            pnts_new = dⁿ(struc)
-            
-            # update flow, this requires scaling the displacements
-            ParametricBodies.update!(body,u⁰.+L*pnts_old,sim.flow.Δt[end])
-            measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            # sim.flow.Δt[end] = 0.2
-            f_new = force(body,sim)
-
-            # check that residuals have converged
-            rd = res(pnts_old,pnts_new); rf = res(f_old,f_new);
-            println("    Iter: ",iter,", rd: ",round(rd,digits=8),", rf: ",round(rf,digits=8))
-            if ((rd<1e-2) && (rf<1e-2)) || iter+1 > 50 # if we converge, we exit to avoid reverting the flow
-                println("  Converged...")
-                # if time step converged, reset coupling preconditionner
-                concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
-                finalize!(QNCouple, updated_values)
-                f_old .= f_new; pnts_old .= pnts_new
-                firstIteration = true
-                break
-            end
-
-            # accelerate coupling
-            concatenate!(updated_values, pnts_new, f_new, QNCouple.subs)
-            updated_values = update(QNCouple, updated_values, firstIteration)
-            revert!(updated_values, pnts_old, f_old, QNCouple.subs)
-        
-            # if we have not converged, we must revert
-            WaterLily.revert!(sim.flow)
-            ParametricBodies.revert!(sim.body);
-            struc.u[1] .= cache[1]
-            struc.u[2] .= cache[2]
-            struc.u[3] .= cache[3]
-            iter += 1
-            firstIteration = false
-        end
-
-        # finish the time step
-        t += sim.flow.Δt[end]
-    end
-
-    println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
+    # plot nice stuff
     get_omega!(sim); plot_vorticity(sim.flow.σ', limit=10)
     c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
     plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)

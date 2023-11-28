@@ -66,10 +66,11 @@ struct CoupledSimulation <: AbstractSimulation
     end
 end
 function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
-    t = sim_time(sim)
+    t = sum(sim.flow.Δt[1:end-1])
+    # @show t
     while t < t_end*sim.L/sim.U
-        verbose && println("  tᵢ=$t_end, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
         store!(sim); iter=1
+        # @show t
         while true
             # update structure
             solve_step!(sim.struc,sim.forces,sim.flow.Δt[end]/sim.L)
@@ -305,6 +306,6 @@ end
 popCol!(A::AbstractArray,k) = (A[:,k:end-1] .= A[:,k+1:end]; A[:,end].=0)
 roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
 """
-    relative residual norm
+    relative residual norm, bounded
 """
 res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹.+eps())

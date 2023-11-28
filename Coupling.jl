@@ -37,6 +37,9 @@ struct CoupledSimulation <: AbstractSimulation
     pois :: AbstractPoisson
     struc 
     cpl :: AbstractCoupling
+    # coupling variables
+    forces :: AbstractArray
+    pnts :: AbstractArray
     # storage for iterations
     uˢ :: AbstractArray
     pˢ :: AbstractArray
@@ -45,13 +48,15 @@ struct CoupledSimulation <: AbstractSimulation
     aˢ :: AbstractArray
     xˢ :: AbstractArray
     ẋˢ :: AbstractArray
-    function CoupledSimulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number, body, struc, coupling;
-                               Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1,
+    function CoupledSimulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number, body, struc, Coupling;
+                               Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1, ωᵣ=0.5, maxCol=100,
                                uλ::Function=(i,x)->u_BC[i],T=Float32,mem=Array) where N
-        flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem)
-        measure!(flow,body;ϵ)
-        new(U,L,ϵ,flow,body,)
-        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ),struc,coupling,
+        flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem); measure!(flow,body;ϵ)
+        force_0 = zeros((2,length(uv_integration(struc.op))))
+        pnts_0 = zero(body.surf.pnts)
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ),struc,
+            Coupling(pnts_0,force_0;relax=ωᵣ,maxCol),
+            force_0,pnts_0,
             zeros(size(flow.u)),zeros(size(flow.p)),
             zeros(size(struc.u[1])),
             zeros(size(struc.u[2])),
@@ -60,20 +65,25 @@ struct CoupledSimulation <: AbstractSimulation
             zeros(size(body.velocity.pnts)))
     end
 end
-function sim_step!(sim::CoupledSimulation,t_end;verbose=false,remeasure=true)
+function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
     t = sim_time(sim)
     while t < t_end*sim.L/sim.U
+        verbose && println("  tᵢ=$t_end, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
         store!(sim); iter=1
-        while iter < 50
+        while true
             # update structure
-            solve_step!(sim.struc,forces,sim.flow.Δt[end]/sim.L)
+            solve_step!(sim.struc,sim.forces,sim.flow.Δt[end]/sim.L)
             # update body
-            ParametricBodies.update!(sim.body,pnts,sim.flow.Δt[end])
+            ParametricBodies.update!(sim.body,u⁰+L*sim.pnts,sim.flow.Δt[end])
             # update flow
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            # compute new coupling variable
+            sim.forces.=force(sim.body,sim.flow); sim.pnts.=points(sim.struc)
             # check convergence and accelerate
-            forces=force(sim.body,sim.flow); pnts=points(sim.struc)
-            update!(sim.coupling,forces,pnts,Val(iter==1)) && break
+            verbose && print("    iteration: ",iter)
+            converged = update!(sim.cpl,sim.pnts,sim.forces,0.0)
+            # revert!(xᵏ,sim.pnts,sim.forces,sim.cpl.subs)
+            (converged || iter+1 > 50) && break
             # revert if not convergend
             revert!(sim); iter+=1
         end
@@ -83,16 +93,6 @@ function sim_step!(sim::CoupledSimulation,t_end;verbose=false,remeasure=true)
                            ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
-# function update!(cp::AbstractCoupling,primary,secondary,kwargs)
-#     # accelerate coupling
-#     updated_values = zeros(cpl.subs[1][1],cpl.subs[end][end])
-#     concatenate!(updated_values,primary,secondary,cp.subs)
-#     res_comb = res(updated_values,cpl.x)
-#     println("    r₂: ",res_comb, " converged: : ",res_comb<1e-2)
-#     converged = update!(cpl,updated_values,kwargs)
-#     revert!(updated_values,primary,secondary,cpl.subs)
-#     return converged
-# end
 function store!(sim::CoupledSimulation)
     sim.uˢ .= sim.flow.u;
     sim.pˢ .= sim.flow.p;
@@ -113,12 +113,19 @@ function revert!(sim::CoupledSimulation)
     sim.body.velocity.pnts .= sim.ẋˢ;
 end
 
+function update!(cp::AbstractCoupling,primary,secondary,kwargs)
+    xᵏ=zero(cp.x); concatenate!(xᵏ,primary,secondary,cp.subs)
+    converged = update!(cp,xᵏ,kwargs)
+    revert!(xᵏ,primary,secondary,cp.subs)
+    return converged
+end
+
 struct Relaxation <: AbstractCoupling
     ω :: Float64                  # relaxation parameter
     x :: AbstractArray{Float64}   # primary variable
     r :: AbstractArray{Float64}   # primary variable
     subs
-    function Relaxation(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5)
+    function Relaxation(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5,maxCol=100)
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
         x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
@@ -136,6 +143,7 @@ function update(cp::Relaxation, xᵏ, reset)
 end
 function update!(cp::Relaxation, xᵏ, kwarg)
     # check convergence
+    println(" r₂: ",res(cp.x, xᵏ), " converged: : ",res(cp.x, xᵏ)<1e-2)
     res(cp.x, xᵏ)<1e-2 && return true
     # store variable and residual
     cp.r .= xᵏ .- cp.x
@@ -229,6 +237,7 @@ end
 function update!(cp::IQNCoupling, xᵏ, kwarg)
     # compute the residuals
     rᵏ = xᵏ .- cp.x;
+    println(" r₂: ",res(cp.x, xᵏ), " converged: : ",res(cp.x, xᵏ)<1e-2)
     # check convergence, if converged add this to the QR
     if res(cp.x, xᵏ)<1e-2
        # update V and W matrix

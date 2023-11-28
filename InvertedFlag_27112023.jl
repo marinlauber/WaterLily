@@ -3,13 +3,9 @@ using ParametricBodies
 using Splines
 using StaticArrays
 using LinearAlgebra
-# using SparseArrays
 include("examples/TwoD_plots.jl")
 include("Coupling.jl")
 
-# function force(b::DynamicBody,sim::Simulation)
-#     reduce(hcat,[NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])
-# end
 function force(b::DynamicBody,flow::Flow)
     reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])
 end
@@ -61,77 +57,67 @@ nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 body = DynamicBody(nurbs, (0,1); dist=dis);
 
 # force function
-integration_points = Splines.uv_integration(struc.op)
+integration_points = uv_integration(struc.op)
 
-# intialise coupling+
-f_old = zeros((2,length(integration_points)))
-pnts_old = zero(u⁰)
+# make a coupled sim
+sim = CoupledSimulation((8L,6L),(U,0),L,body,struc,IQNCoupling;
+                         U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=6,T=Float64)
 
-# set up coupling
-# QNCouple = Relaxation(points(struc),f_old;relax=0.8)
-QNCouple = IQNCoupling(points(struc),f_old;relax=0.05,maxCol=6)
-updated_values = zero(QNCouple.x)
-
-sim = CoupledSimulation((8L,6L),(U,0),L,body,struc,QNCouple;U,ν=U*L/Re,ϵ,T=Float64)
-
+# sime time
 t₀ = round(sim_time(sim))
-duration = 30.0
+duration = 1.0
 step = 0.2
 
 # time loop
 @gif for tᵢ in range(t₀,t₀+duration;step)
-
-    global f_old, pnts_old, updated_values;
+    
+    # sim_step!(sim,tᵢ)
 
     # update until time tᵢ in the background
-    t = sum(sim.flow.Δt[1:end-1])
-
+    t = sim_time(sim)
+    
     while t < tᵢ*sim.L/sim.U
         
         println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
         # save at start of iterations
-        store!(sim)
-        
-        # implicit solve
-        iter=1; firstIteration=true
+        store!(sim); iter=1;
 
         # iterative loop
         while true
 
             #  integrate once in time
-            solve_step!(sim.struc, f_old, sim.flow.Δt[end]/sim.L)
-            pnts_new = points(sim.struc)
+            solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+L*pnts_old,sim.flow.Δt[end])
+            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
-            f_new = force(sim.body,sim.flow)
+
+            # get new coupling variable
+            sim.pnts .= points(sim.struc)
+            sim.forces .= force(sim.body,sim.flow)
 
             if t/sim.L*sim.U<2.0
-                f_new .-= 0.5
+                sim.forces .-= 0.5
             end
 
             # accelerate coupling
-            concatenate!(updated_values, pnts_new, f_new, sim.cpl.subs)
-            res_comb = res(updated_values, sim.cpl.x)
-            println("    iteration: ",iter," r₂: ",res_comb, " converged: : ",res_comb<1e-2)
-            converged = update!(sim.cpl, updated_values, firstIteration)
-            revert!(updated_values, pnts_old, f_old, sim.cpl.subs)
-            if converged || iter+1 > 50 
-                break
-            end
+            print("    iteration: ",iter)
+            converged = update!(sim.cpl, sim.pnts, sim.forces, 0.0)
+
+            # check for convengence
+            (converged || iter+1 > 50) && break
 
             # if we have not converged, we must revert
-            revert!(sim)
-            iter += 1
+            revert!(sim); iter += 1
         end
 
         # finish the time step
         t += sim.flow.Δt[end]
     end
 
-    println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
+
+    # println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
     get_omega!(sim); plot_vorticity(sim.flow.σ, limit=10)
     plot!(sim.body.surf)
     plot!(title="tU/L $tᵢ")

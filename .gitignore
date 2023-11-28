@@ -27,3 +27,6 @@ Manifest.toml
 *.svg
 dev/
 old/
+Inverted-Flag/
+debug_QN/
+preCICE_perp_flap/

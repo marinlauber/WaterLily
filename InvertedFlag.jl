@@ -19,7 +19,7 @@ ptRight = 1.0
 # parameters
 EI = 0.35         # Cauhy number
 EA = 100_000.0  # make inextensible
-density(ξ) = 0.3  # mass ratio
+density(ξ) = 0.5  # mass ratio
 
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
@@ -64,7 +64,7 @@ sim = CoupledSimulation((8L,6L),(U,0),L,body,struc,IQNCoupling;
                          U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=6,T=Float64)
 
 # sime time
-t₀ = round(sim_time(sim)); duration = 1.0; tep = 0.2
+t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -85,10 +85,10 @@ t₀ = round(sim_time(sim)); duration = 1.0; tep = 0.2
         while true
 
             #  integrate once in time
-            solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
+            solve_step!(sim.struc, sim.forces, sim.flow.Δt[end])
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
+            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end]/sim.L)
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
 
             # get new coupling variable
@@ -109,7 +109,7 @@ t₀ = round(sim_time(sim)); duration = 1.0; tep = 0.2
             # if we have not converged, we must revert
             revert!(sim); iter += 1
         end
-
+        println(" beam length: ", integrate(sim.body.surf))
         # finish the time step
         t += sim.flow.Δt[end]
     end

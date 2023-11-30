@@ -1,4 +1,5 @@
 using WaterLily
+using ParametricBodies
 using StaticArrays
 include("examples/TwoD_plots.jl")
 
@@ -44,13 +45,28 @@ function TurekHron(x,t)
         √sum(abs2, x .- SA[clamp(x[1],2.5D,6D),center[2]]) - D/5)
 end
 
+function cylinder(x,t)
+    √sum(abs2, x .- center) - D/2
+end
+
 # simulation parameters
 U = 1
 Re=200
 D = 32
+ϵ=0.5
+thk=2ϵ+√2
 m,n = 11D,4D
 center = [2D,2D]
+
+# define a flat plat at and angle of attack
+cps = SA[0 1.75 3.5
+         0 0 0]*D .+ [2.5D,2D]
+
+# make a nurbs curve
+flap = BSplineCurve(MMatrix(cps);degree=2)
+
 body = AutoBody(TurekHron)
+# body = AutoBody(cylinder) + DynamicBody(flap,(0,1);dist=(p,n)->√(p'*p)-thk/2)
 sim = Simulation((m,n), (U,0), D; ν=U*D/Re, body, uλ=uλ)
 
 duration=10.0

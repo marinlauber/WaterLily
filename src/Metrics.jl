@@ -59,7 +59,7 @@ end
 """
     FMPM
 
-Force and moemtn parition method computation
+Force and moment partition computation
 """
 function fmpm()
     # nothing yet

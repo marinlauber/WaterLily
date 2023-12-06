@@ -2,15 +2,33 @@ using PreCICE
 using Splines
 using StaticArrays
 using LinearAlgebra
-
+# structure to store solid state
+struct Store
+    dˢ::AbstractArray
+    vˢ::AbstractArray
+    aˢ::AbstractArray
+    function Store(struc::AbstractFEOperator)
+        new(copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
+    end
+end
+function store!(s::Store,struc::AbstractFEOperator)
+    s.dˢ .= struc.u[1];
+    s.vˢ .= struc.u[2]
+    s.aˢ .= struc.u[3];
+end
+function revert!(s::Store,struc::AbstractFEOperator)
+    struc.u[1] .= s.dˢ;
+    struc.u[2] .= s.vˢ;
+    struc.u[3] .= s.aˢ;
+end
 # Material properties and mesh
 numElem=4
 degP=3
 ptLeft = 0.0
 ptRight = 1.0
 EI = 0.35
-EA = 10000.0
-density(ξ) = 1.0
+EA = 100_000.0
+density(ξ) = 0.5
 
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
@@ -25,8 +43,9 @@ Neumann_BC = [
     Boundary1D("Neumann", ptRight, 0.0; comp=2)
 ]
 
-# make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC; ρ=density); ρ∞=0.0)
+# make a structure and a storage
+struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
+store = Store(struc)
 
 # coupling
 createSolverInterface("Splines", "./precice-config.xml", 0, 1)
@@ -37,7 +56,7 @@ numberOfVertices = 3
 writeData = 0.0*Matrix(mesh.controlPoints[1:2,:]')
 
 # location of integration points
-integration_points = Splines.uv_integration(struc.op)
+integration_points = uv_integration(struc)
 
 vertices_n = Array{Float64,2}(undef, size(mesh.controlPoints[1:2,:]'))
 vertices_f = Array{Float64,2}(undef, length(integration_points), dimensions)
@@ -61,7 +80,7 @@ let # setting local scope for dt outside of the while loop
     # start coupling
     dt_precice = PreCICE.initialize()
 
-    L = 2^5
+    L = 2^5 # needed from the fluid for scaling
     dt = min(0.25, dt_precice)
     PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
     markActionFulfilled(actionWriteInitialData())
@@ -75,8 +94,8 @@ let # setting local scope for dt outside of the while loop
         readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
     end
 
+    # start sim
     t = 0.0
-    cache = (copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
 
     while PreCICE.isCouplingOngoing()
 
@@ -84,14 +103,13 @@ let # setting local scope for dt outside of the while loop
 
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
             # println("Splines: Writing iteration checkpoint")
-            cache = (copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
+            store!(store,struc)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
         if PreCICE.isReadDataAvailable()
             # println("Splines: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
-            # display(readData)
         end
 
         # update the structure
@@ -100,7 +118,6 @@ let # setting local scope for dt outside of the while loop
         if PreCICE.isWriteDataRequired(dt)
             # println("Splnies: Writing data")
             writeData .= reshape(struc.u[1][1:2mesh.numBasis],(mesh.numBasis,2))
-            # display(writeData)
             PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
         end
 
@@ -108,9 +125,7 @@ let # setting local scope for dt outside of the while loop
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
             # println("Splines: Reading iteration checkpoint")
-            struc.u[1] .= cache[1]
-            struc.u[2] .= cache[2]
-            struc.u[3] .= cache[3]
+            revert!(store,struc)
             markActionFulfilled(actionReadIterationCheckpoint())
         end
 

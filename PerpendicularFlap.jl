@@ -64,9 +64,8 @@ Neumann_BC = [
 ]
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, 
-                         Dirichlet_BC, Neumann_BC; ρ=density);
-                         ρ∞=0.0)
+struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, 
+                          Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
 
 ## Simulation parameters
 L=2^4
@@ -86,7 +85,7 @@ nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 body = DynamicBody(nurbs, (0,1); dist=dis);
 
 # force function
-integration_points = uv_integration(struc.op)
+integration_points = uv_integration(struc)
 
 # make a simulation
 sim = CoupledSimulation((4L,6L),(0,U),L,body,struc,IQNCoupling;

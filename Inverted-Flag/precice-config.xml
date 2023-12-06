@@ -66,8 +66,8 @@
       <max-iterations value="50" />
       <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>
       <exchange data="Forces"        mesh="Force-Mesh-Solid" from="WaterLily" to="Splines"   initialize="true"/>
-      <relative-convergence-measure limit="1e-2" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
-      <relative-convergence-measure limit="1e-2" data="Forces"        mesh="Force-Mesh-Solid"/>
+      <relative-convergence-measure limit="1e-4" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
+      <relative-convergence-measure limit="1e-4" data="Forces"        mesh="Force-Mesh-Solid"/>
       <acceleration:IQN-ILS>
         <data name="Displacements" mesh="Nurbs-Mesh-Solid" />
         <data name="Forces"        mesh="Force-Mesh-Solid" />

@@ -52,7 +52,7 @@ struct CoupledSimulation <: AbstractSimulation
                                Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1, ωᵣ=0.5, maxCol=100,
                                uλ::Function=(i,x)->u_BC[i],T=Float32,mem=Array) where N
         flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem); measure!(flow,body;ϵ)
-        force_0 = zeros((2,length(uv_integration(struc.op))))
+        force_0 = zeros((2,length(uv_integration(struc))))
         pnts_0 = zero(body.surf.pnts)
         new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ),struc,
             Coupling(pnts_0,force_0;relax=ωᵣ,maxCol),

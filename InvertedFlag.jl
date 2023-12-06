@@ -35,9 +35,8 @@ Neumann_BC = [
 ]
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, EI, EA, 
-                         Dirichlet_BC, Neumann_BC; ρ=density);
-                         ρ∞=0.0)
+struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, 
+                         Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
 
 ## Simulation parameters
 L=2^4
@@ -57,7 +56,7 @@ nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 body = DynamicBody(nurbs, (0,1); dist=dis);
 
 # force function
-integration_points = uv_integration(struc.op)
+integration_points = uv_integration(struc)
 
 # make a coupled sim
 sim = CoupledSimulation((8L,6L),(U,0),L,body,struc,IQNCoupling;
@@ -85,10 +84,10 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
         while true
 
             #  integrate once in time
-            solve_step!(sim.struc, sim.forces, sim.flow.Δt[end])
+            solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end]/sim.L)
+            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
 
             # get new coupling variable
@@ -96,7 +95,7 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
             sim.forces .= force(sim.body,sim.flow)
 
             if t/sim.L*sim.U<2.0
-                sim.forces .-= 0.5
+                sim.forces[2,:] .-= 0.5 # add vertical force
             end
 
             # accelerate coupling

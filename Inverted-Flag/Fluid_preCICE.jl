@@ -4,13 +4,28 @@ using ParametricBodies
 using Splines
 using StaticArrays
 using Plots; gr()
-using WriteVTK
-using Printf: @sprintf
 include("../examples/TwoD_plots.jl")
-include("../src/vtkWriter.jl")
-
-function force(b::DynamicBody,sim::Simulation)
-    reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])'
+# this is transposed, careful
+function force(b::DynamicBody,flow::Flow)
+    reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])'
+end
+# structure to store fluid state
+struct Store
+    uˢ::AbstractArray
+    pˢ::AbstractArray
+    xˢ::AbstractArray
+    ẋˢ::AbstractArray
+    function Store(sim::AbstractSimulation)
+        new(copy(sim.flow.u),copy(sim.flow.p),copy(sim.body.surf.pnts),copy(sim.body.velocity.pnts))
+    end
+end
+function store!(s::Store,sim::AbstractSimulation)
+    s.uˢ .= sim.flow.u; s.pˢ .= sim.flow.p;
+    s.xˢ .= sim.body.surf.pnts; s.ẋˢ .= sim.body.velocity.pnts;
+end
+function revert!(s::Store,sim::AbstractSimulation)
+    sim.flow.u .= s.uˢ; sim.flow.p .= s.pˢ; pop!(sim.flow.Δt)
+    sim.body.surf.pnts .= s.xˢ; sim.body.velocity.pnts .= s.ẋˢ;
 end
 
 # Material properties and mesh
@@ -39,8 +54,9 @@ nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 # flow sim
 body = DynamicBody(nurbs, (0,1));
 
-# make a simulation
+# make a simulation and a storage
 sim = Simulation((6L,4L),(U,0),L;U,ν=U*L/Re,body,ϵ,T=Float64)
+store = Store(sim)
 
 # make a problem
 Dirichlet_BC = [
@@ -51,19 +67,17 @@ Neumann_BC = [
     Boundary1D("Neumann", ptRight, 0.0; comp=1),
     Boundary1D("Neumann", ptRight, 0.0; comp=2)
 ]
-# p = EulerBeam(1, 1, x->0.0, mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
 
 # make a structure
-struc = GeneralizedAlpha(FEOperator(mesh, gauss_rule, 0.35, 1000, Dirichlet_BC, Neumann_BC; ρ=(x)->5.0); ρ∞=0.5)
-
+struc = DynamicFEOperator(mesh, gauss_rule, 0.35, 1000, Dirichlet_BC, Neumann_BC, ρ=(x)->5.0; ρ∞=0.5)
+# 
 # location of integration points
-integration_points = Splines.uv_integration(struc.op)
+integration_points = uv_integration(struc)
 
 # coupling
 createSolverInterface("WaterLily", "./precice-config.xml", 0, 1)
-dimensions = PreCICE.getDimensions()
-numberOfVertices = 3
-writeData = force(body,sim)
+# dimensions = PreCICE.getDimensions()
+writeData = force(sim.body,sim.flow)
 
 vertices_n = Array{Float64,2}(undef, size(u⁰')...)
 vertices_f = Array{Float64,2}(undef, size(writeData)...)
@@ -97,11 +111,23 @@ custom_attrib = Dict(
 )# this maps what to write to the name in the file
 
 # make the writer
-wr = vtkWriter("TwoD_circle"; attrib=custom_attrib)
+wr = vtkWriter("Inverted-Flag"; attrib=custom_attrib)
 
 let # setting local scope for dt outside of the while loop
-    ids = 1
     dt_precice = PreCICE.initialize()
+
+    # create force and nurbs mesh from the solid data
+    # ID_f = PreCICE.getMeshID("Force-Mesh")
+    # ID_n = PreCICE.getMeshID("Nurbs-Mesh")
+    # n_f = PreCICE.getMeshVertexSize(ID_f)
+    # n_d = PreCICE.getMeshVertexSize(ID_n)
+    # vertices_f = PreCICE.getMeshVertices(ID_f,Array{Int32}(collect(0:n_f-1)))
+    # integration_points = vertices_f[:,1] # uv-components
+    # vertices_n = PreCICE.getMeshVertices(ID_n,Array{Int32}(collect(0:n_d-1)))
+    # DataID_f = PreCICE.getDataID("Forces", ID_f)
+    # DataID_n = PreCICE.getDataID("Displacements", ID_n)
+    # vertexIDs_f = PreCICE.setMeshVertices(ID_f, vertices_f)
+    # vertexIDs_n = PreCICE.setMeshVertices(ID_n, vertices_n)
 
     dt = min(0.25, dt_precice)
     PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
@@ -119,7 +145,7 @@ let # setting local scope for dt outside of the while loop
     end
 
     # simulations time
-    t = 0.0; ids = 1
+    t = 0.0;
 
     while PreCICE.isCouplingOngoing()
 
@@ -129,7 +155,7 @@ let # setting local scope for dt outside of the while loop
 
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
             # println("WaterLily: Writing iteration checkpoint")
-            WaterLily.store!(sim.flow)
+            store!(store,sim)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
@@ -145,9 +171,9 @@ let # setting local scope for dt outside of the while loop
         
         if PreCICE.isWriteDataRequired(dt)
             # println("WaterLily: Writing data")
-            writeData = force(body,sim)
-            if t<=L
-                writeData[:,2] .= -1.0
+            writeData = force(sim.body,sim.flow)
+            if t<=2L # trigger instability
+                writeData[:,2] .= -0.5
             end
             # display(writeData)
             PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
@@ -157,7 +183,7 @@ let # setting local scope for dt outside of the while loop
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
             # println("WaterLily: Reading iteration checkpoint")
-            WaterLily.revert!(sim.flow)
+            revert!(store,sim)
             markActionFulfilled(actionReadIterationCheckpoint())
         end
 
@@ -165,22 +191,10 @@ let # setting local scope for dt outside of the while loop
             t += dt
             # write data
             write!(wr, sim)
-        end
-        # if mod(t,L)≈0
-        # get_omega!(sim); plot_vorticity(sim.flow.σ,limit=10)
-        # c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
-        # plot!(getindex.(c,1).+0.5,getindex.(c,2).+0.5,linewidth=2,color=:black)
-        # savefig("WaterLily_$(ids).png"); ids += 1
-        # end        
+        end    
     end # while
     close(wr)
-    get_omega!(sim); plot_vorticity(sim.flow.σ,limit=10)
-    c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
-    plot!(getindex.(c,1).+0.5,getindex.(c,2).+0.5,linewidth=2,color=:black)
-    savefig("WaterLily.png")
 end # let
 
-# display(sim.flow.Δt)
 PreCICE.finalize()
 println("WaterLily: Closing Julia solver...")
-# gif(anim, "anim.gif", fps = 30)

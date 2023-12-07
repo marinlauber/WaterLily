@@ -7,8 +7,12 @@ function vector_plot!(u::AbstractArray)
     us = u.*.√sum(u.^2,dims=length(size(u)));
     quiver!(x,y,quiver=([us[:,:,1]...],[us[:,:,2]...]))
 end
+norm(I,u) = √sum(u[I,:].^2)
+dot(I::CartesianIndex{n},a,b) where n = sum(ntuple(i->a[I,i]*b[I,i],n))
+cross(I::CartesianIndex{3},a,b) = WaterLily.fSV(i->WaterLily.permute((j,k)->a[I,j]*b[I,k],i),3)
+cross(I::CartesianIndex{2},a,b) = WaterLily.fSV(i->-a[I]*b[I,i%2+1],2)
 function fmpm(flow,pois,i)
-    #
+    
 end
 
 # parameters
@@ -46,13 +50,13 @@ solver!(pois); ϕ.=pois.x; BC!(ϕ)
 
 # compute gradient of potential -> velocity
 for i ∈ 1:2
-    @WaterLily.loop ∇ϕ[I,i] -= μ₀[I,i]*WaterLily.∂(i,I,ϕ) over I ∈ WaterLily.inside(pois.x)
+    @WaterLily.loop ∇ϕ[I,i] -= μ₀[I,i]*WaterLily.∂(i,I,ϕ) over I ∈ inside(pois.x)
 end
 
 # plot to check
 R = inside(ϕ)
-flood(ϕ[R],shift=(-1.,-1.),clims=(-radius,radius),levels=51,filled=true)
-flood(∇ϕ[R,1],levels=51,filled=true)
+flood(ϕ[R],shift=(-1.,-1.),clims=(-radius,radius),levels=11,filled=true)
+flood(∇ϕ[R,1],levels=11,filled=true)
 body_plot!(sim)
 
 # we can check by simply multyplying the potential by the laplacian and
@@ -61,38 +65,67 @@ body_plot!(sim)
 # flood(pois.x,shift=(-1.,-1.),levels=51,filled=true)
 # body_plot!(sim)
 
-function normal(x,i)
+# compute vorticity once
+ω = copy(sim.flow.σ); @inside ω[I] = WaterLily.curl(3,I,sim.flow.u)
+
+function normal(i,x)
     _,nᵢ,_ = measure(sim.body,x,0.0); nᵢ[i] # i-component of the normal
 end
-nⱼ = copy(ϕ); component=2; apply!(x->normal(x,2),nⱼ); BC!(nⱼ)
+n = copy(sim.flow.u); apply!(normal,n); BC!(n)
+nⱼ = @view n[:,:,2]
 
-# viscous force
-@inside sim.flow.σ[I] = WaterLily.curl(3,I,sim.flow.u)
-@inside sim.flow.σ[I] = sim.flow.ν.*(sim.flow.σ[I]*nⱼ[I]).*(∇ϕ[I,1] .- 1)
+function ndotdUdt(I,t,body,n)
+    x = WaterLily.loc(0,I)
+    # The velocity depends on the material change of ξ=m(x,t):
+    #   Dm/Dt=0 → ṁ + (dm/dx)ẋ = 0 ∴  ẋ =-(dm/dx)\ṁ
+    J = ForwardDiff.jacobian(x->body.map(x,t), x)
+    dot = ForwardDiff.derivative(t->body.map(x,t), t)
+    v = -J\dot; a=0.0#?
+    return sum(n[I,:].*a)
+end
+
+# body forces
+@inside sim.flow.σ[I] = ndotdUdt(I,0.0,sim.body,n)*ϕ[I] - 0.5*norm(I,sim.flow.V)^2*nⱼ[I]
 flood(sim.flow.σ, clims=(-1,1))
-Cσ = WaterLily.∮nds(sim.flow.σ,sim.flow.f,sim.body,0)
-
-dot(I::CartesianIndex{n},a,b) where n = sum(ntuple(i->a[I,i]*b[I,i],n))
-cross(I::CartesianIndex{3},a,b) = WaterLily.fSV(i->WaterLily.permute((j,k)->a[I,j]*b[I,k],i),3)
-cross(I::CartesianIndex{2},a,b) = WaterLily.fSV(i->-a[I]*b[I,i%2+1],2)
+Ck = WaterLily.∮nds(sim.flow.σ,sim.flow.f,sim.body,0)
 
 # vorticity forces
-ωxu = copy(sim.flow.u);
 # uᵥ,uϕ = helmholtz(sim.flow.u);
-@inside sim.flow.σ[I] = WaterLily.curl(3,I,sim.flow.u)
-@WaterLily.loop ωxu[I,:] .= cross(I,sim.flow.σ,sim.flow.u) over I in inside(ϕ)
-@inside sim.flow.σ[I] = WaterLily.div(I,ωxu)*ϕ[I]
+@inside sim.flow.σ[I] = (0.5*dot(I,uᵥ,uᵥ)+dot(I,uᵩ,uᵥ))*ϕ[I]
+for i ∈ 1:n
+    @WaterLily.loop sim.flow.f[I,i] = WaterLily.∂(i,I,sim.flow.σ) over I in inside(ϕ)
+end
+@WaterLily.loop sim.flow.f[I,:] .+= cross(I,ω,sim.flow.u) over I in inside(ϕ)
+@inside sim.flow.σ[I] = WaterLily.div(I,sim.flow.f)*ϕ[I]
 flood(sim.flow.σ, clims=(-1,1))
-Cω = sum(sim.flow.σ[inside(sim.flow.p)])
+Cω = sum(sim.flow.σ[inside(sim.flow.σ)])
+
+# viscous force
+@WaterLily.loop sim.flow.f[I,:] = cross(I,ω,n) over I in inside(ϕ)
+∇ϕ[:,:,1] .-= 1.0
+@inside sim.flow.σ[I] = dot(I,sim.flow.f,∇ϕ)
+∇ϕ[:,:,1] .+= 1.0
+flood(sim.flow.σ, clims=(-1,1))
+Cσ = sim.flow.ν.*WaterLily.∮nds(sim.flow.σ,sim.flow.f,sim.body,0)
+
+# potential force
+@inside sim.flow.σ[I] = 0.5*dot(I,uᵩ,uᵩ)*ϕ[I]
+for i ∈ 1:n
+    @WaterLily.loop sim.flow.f[I,i] = WaterLily.∂(i,I,sim.flow.σ) over I in inside(ϕ)
+end
+@inside sim.flow.σ[I] = WaterLily.div(I,sim.flow.f)
+Cϕ = sum(sim.flow.σ[inside(sim.flow.σ)])
 
 # boundary force
-@inside sim.flow.σ[I] = sim.flow.ν*WaterLily.curl(3,I,sim.flow.u)
-N,n = Waterlily.size_u(sim.flow.u)
-for i ∈ 1:n
-    n=zero(2); n[i]=1
-    for I ∈ slice(N,1,j)
-        sum += cross(I,sim.flow.σ,n) + corss(I+δ(j,I),sim.flow.σ,-n)
-    end
+N,n = WaterLily.size_u(sim.flow.u)
+dudt = copy(sim.flow.u); C∑=0.0# must be filled manually
+# for i ∈ 1:n
+#     n=zero(2); n[i]=1
+#     for I ∈ slice(N,1,i)
+#         C∑ += sim.flow.ν*WaterLilycross(I,ω,n)*∇ϕ[I,i]
+#         C∑ += sim.flow.ν*cross(I+N[i]*δ(i,I),ω,-n)*∇ϕ[I+N[i]*δ(i,I),i]
+#         C∑ -= dudt[I,i]*n[I,i]*ϕ[I]
+#     end
 end
 
 # helmholtz decomposition http://pcmap.unizar.es/~jaca2016/PDFXII/Ahusborde.pdf

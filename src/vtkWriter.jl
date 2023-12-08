@@ -27,7 +27,9 @@ to put in the file. With this approach, any variable can be save to the vtk file
 """
 _velocity(a::Simulation) = a.flow.u |> Array;
 _pressure(a::Simulation) = a.flow.p |> Array;
-default_attrib() = Dict("Velocity"=>_velocity, "Pressure"=>_pressure)
+_body(a::Simulation) = (measure_sdf!(a.flow.σ, a.body, time(a)); 
+                                     a.flow.σ |> Array;)
+default_attrib() = Dict("Velocity"=>_velocity, "Pressure"=>_pressure, "Body"=>_body)
 """
     write!(w::vtkWriter, sim::Simulation)
 

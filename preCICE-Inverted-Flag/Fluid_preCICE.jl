@@ -45,14 +45,14 @@ U=1
 thk=2ϵ+√2
 
 # overload the distance function
-ParametricBodies.dis(p,n) = √(p'*p) - thk/2
+dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
 u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[2L,2L])
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
-body = DynamicBody(nurbs, (0,1));
+body = DynamicBody(nurbs, (0,1); dist=dis);
 
 # make a simulation and a storage
 sim = Simulation((6L,4L),(U,0),L;U,ν=U*L/Re,body,ϵ,T=Float64)
@@ -76,7 +76,6 @@ integration_points = uv_integration(struc)
 
 # coupling
 createSolverInterface("WaterLily", "./precice-config.xml", 0, 1)
-# dimensions = PreCICE.getDimensions()
 writeData = force(sim.body,sim.flow)
 
 vertices_n = Array{Float64,2}(undef, size(u⁰')...)
@@ -154,13 +153,11 @@ let # setting local scope for dt outside of the while loop
         sim.flow.Δt[end] = dt
 
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
-            # println("WaterLily: Writing iteration checkpoint")
             store!(store,sim)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
         if PreCICE.isReadDataAvailable()
-            # println("WaterLily: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_n, vertexIDs_n)
             readData .= u⁰' + readData.*L
             ParametricBodies.update!(body,Matrix(readData'),dt)
@@ -170,19 +167,14 @@ let # setting local scope for dt outside of the while loop
         measure!(sim,t); mom_step!(sim.flow,sim.pois)
         
         if PreCICE.isWriteDataRequired(dt)
-            # println("WaterLily: Writing data")
             writeData = force(sim.body,sim.flow)
-            if t<=2L # trigger instability
-                writeData[:,2] .= -0.5
-            end
-            # display(writeData)
+            t<=2L && writeData[:,2] .= -0.5
             PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
         end
         
         dt_precice = PreCICE.advance(dt)
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
-            # println("WaterLily: Reading iteration checkpoint")
             revert!(store,sim)
             markActionFulfilled(actionReadIterationCheckpoint())
         end

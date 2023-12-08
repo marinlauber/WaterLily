@@ -2,21 +2,34 @@ using PreCICE
 using Splines
 using StaticArrays
 using LinearAlgebra
+# structure to store solid state
+struct Store
+    dˢ::AbstractArray
+    vˢ::AbstractArray
+    aˢ::AbstractArray
+    function Store(struc::AbstractFEOperator)
+        new(copy(struc.u[1]),copy(struc.u[2]),copy(struc.u[3]))
+    end
+end
+function store!(s::Store,struc::AbstractFEOperator)
+    s.dˢ .= struc.u[1];
+    s.vˢ .= struc.u[2]
+    s.aˢ .= struc.u[3];
+end
+function revert!(s::Store,struc::AbstractFEOperator)
+    struc.u[1] .= s.dˢ;
+    struc.u[2] .= s.vˢ;
+    struc.u[3] .= s.aˢ;
+end
 
 # Material properties and mesh
 numElem=4
 degP=3
 ptLeft = 0.0
 ptRight = 1.0
-A = 0.1
-L = 1.0
-EI = 0.25
-EA = 10000.0
-f(s) = [0.0,0.0] # s is curvilinear coordinate
-
-# natural frequencies
-ωₙ = 1.875; fhz = 0.125
-density(ξ) = (ωₙ^2/2π)^2*(EI/(fhz^2*L^4))
+EI = 4.0
+EA = 400000.0
+density(ξ) = 3
 
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
@@ -31,31 +44,23 @@ Neumann_BC = [
     Boundary1D("Neumann", ptRight, 0.0; comp=2)
 ]
 
-# make a problem
-p = EulerBeam(EI, EA, f, mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
-
-## Time integration
-ρ∞ = 0.5; # spectral radius of the amplification matrix at infinitely large time step
-αm = (2.0 - ρ∞)/(ρ∞ + 1.0);
-αf = 1.0/(1.0 + ρ∞)
-γ = 0.5 - αf + αm;
-β = 0.25*(1.0 - αf + αm)^2;
-# unconditional stability αm ≥ αf ≥ 1/2
+# make a structure and a storage
+struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
+store = Store(struc)
 
 # coupling
 createSolverInterface("Splines", "./precice-config.xml", 0, 1)
 
 dimensions = PreCICE.getDimensions()
-numberOfVertices = 3
 writeData = 0.0*Matrix(mesh.controlPoints[1:2,:]')
 
 # location of integration points
-integration_points = Splines.uv_integration(p)
+integration_points = Splines.uv_integration(struc)
 
 vertices_n = Array{Float64,2}(undef, size(mesh.controlPoints[1:2,:]'))
 vertices_f = Array{Float64,2}(undef, length(integration_points), dimensions)
 vertices_n .= mesh.controlPoints[1:2,:]'
-vertices_f[:,1] .= integration_points[:]
+vertices_f[:,1] .= integration_points[:] # the mesh is only defined in the parametric spaces
 vertices_f[:,2] .= 0.0
 
 
@@ -71,22 +76,11 @@ vertexIDs_f = PreCICE.setMeshVertices(ID_f, vertices_f)
 
 let # setting local scope for dt outside of the while loop
 
-    # unpack variables
-    @unpack x, resid, jacob = p
-    M = spzero(jacob)
-    stiff = zeros(size(jacob))
-    fext = zeros(size(resid)); loading = zeros(size(resid))
-    M = global_mass!(M, mesh, density, gauss_rule)
-    a0 = zeros(size(resid))
-    dⁿ = u₀ = zero(a0);
-    vⁿ = zero(a0);
-    aⁿ = zero(a0);
-
     # start coupling
-    PreCICE.initialize()
+    dt_precice = PreCICE.initialize()
 
-    L = 2^4
-    dt = 0.2
+    L = 2^4 # needed from the fluid for scaling
+    dt = min(0.25, dt_precice)
     PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
     markActionFulfilled(actionWriteInitialData())
 
@@ -95,50 +89,39 @@ let # setting local scope for dt outside of the while loop
 
     # reading initial data
     if PreCICE.isReadDataAvailable()
-        # println("Splines: Reading initial data")
         readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
     end
 
-    t = 0.0
-    cache = (dⁿ, vⁿ, aⁿ)
+    # start time
+    t = 0.0;
 
     while PreCICE.isCouplingOngoing()
 
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
-            # println("Splines: Writing iteration checkpoint")
-            cache = (dⁿ, vⁿ, aⁿ)
+            store!(store,struc)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
         if PreCICE.isReadDataAvailable()
-            # println("Splines: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
-            display(readData)
         end
 
         # update the structure
-        dⁿ⁺¹, vⁿ⁺¹, aⁿ⁺¹ = Splines.step2(jacob, stiff, Matrix(M), resid, fext,
-                                         Matrix(readData'), dⁿ, vⁿ, aⁿ, t/L, (t+dt)/L, αm, αf, β, γ, p)
+        solve_step!(struc, Matrix(readData'), dt/L)
         
         if PreCICE.isWriteDataRequired(dt)
-            # println("Splnies: Writing data")
-            writeData .= reshape(dⁿ⁺¹[1:2p.mesh.numBasis],(p.mesh.numBasis,2))
-            display(writeData)
+            writeData .= reshape(struc.u[1][1:2mesh.numBasis],(mesh.numBasis,2))
             PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
         end
 
-        PreCICE.advance(dt)
+        dt_precice = PreCICE.advance(dt)
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
-            # println("Splines: Reading iteration checkpoint")
-            dⁿ, vⁿ, aⁿ = cache
+            revert!(store,struc)
             markActionFulfilled(actionReadIterationCheckpoint())
         end
 
         if PreCICE.isTimeWindowComplete()
-            dⁿ.= dⁿ⁺¹
-            vⁿ.= vⁿ⁺¹
-            aⁿ.= aⁿ⁺¹
             t += dt
         end
 

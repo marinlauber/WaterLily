@@ -51,8 +51,6 @@ store = Store(struc)
 createSolverInterface("Splines", "./precice-config.xml", 0, 1)
 
 dimensions = PreCICE.getDimensions()
-numberOfVertices = 3
-# zero displacements
 writeData = 0.0*Matrix(mesh.controlPoints[1:2,:]')
 
 # location of integration points
@@ -61,7 +59,7 @@ integration_points = uv_integration(struc)
 vertices_n = Array{Float64,2}(undef, size(mesh.controlPoints[1:2,:]'))
 vertices_f = Array{Float64,2}(undef, length(integration_points), dimensions)
 vertices_n .= mesh.controlPoints[1:2,:]'
-vertices_f[:,1] .= integration_points[:]
+vertices_f[:,1] .= integration_points[:] # the mesh is only defined in the parametric spaces
 vertices_f[:,2] .= 0.0
 
 
@@ -90,7 +88,6 @@ let # setting local scope for dt outside of the while loop
 
     # reading initial data
     if PreCICE.isReadDataAvailable()
-        # println("Splines: Reading initial data")
         readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
     end
 
@@ -102,13 +99,11 @@ let # setting local scope for dt outside of the while loop
         dt = min(dt, dt_precice)
 
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
-            # println("Splines: Writing iteration checkpoint")
             store!(store,struc)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
         if PreCICE.isReadDataAvailable()
-            # println("Splines: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_f, vertexIDs_f)
         end
 
@@ -116,7 +111,6 @@ let # setting local scope for dt outside of the while loop
         solve_step!(struc, Matrix(readData'), dt/L)
 
         if PreCICE.isWriteDataRequired(dt)
-            # println("Splnies: Writing data")
             writeData .= reshape(struc.u[1][1:2mesh.numBasis],(mesh.numBasis,2))
             PreCICE.writeBlockVectorData(DataID_n, vertexIDs_n, writeData)
         end
@@ -124,7 +118,6 @@ let # setting local scope for dt outside of the while loop
         dt_precice = PreCICE.advance(dt)
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
-            # println("Splines: Reading iteration checkpoint")
             revert!(store,struc)
             markActionFulfilled(actionReadIterationCheckpoint())
         end

@@ -3,11 +3,58 @@ using WaterLily
 using ParametricBodies
 using Splines
 using StaticArrays
-using LinearAlgebra
-include("../examples/TwoD_plots.jl"); gr();
+using Plots; gr()
+include("../examples/TwoD_plots.jl")
+# this is transposed, careful
+function force(b::DynamicBody,flow::Flow)
+    reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])'
+end
+# structure to store fluid state
+struct Store
+    uˢ::AbstractArray
+    pˢ::AbstractArray
+    xˢ::AbstractArray
+    ẋˢ::AbstractArray
+    function Store(sim::AbstractSimulation)
+        new(copy(sim.flow.u),copy(sim.flow.p),copy(sim.body.surf.pnts),copy(sim.body.velocity.pnts))
+    end
+end
+function store!(s::Store,sim::AbstractSimulation)
+    s.uˢ .= sim.flow.u; s.pˢ .= sim.flow.p;
+    s.xˢ .= sim.body.surf.pnts; s.ẋˢ .= sim.body.velocity.pnts;
+end
+function revert!(s::Store,sim::AbstractSimulation)
+    sim.flow.u .= s.uˢ; sim.flow.p .= s.pˢ; pop!(sim.flow.Δt)
+    sim.body.surf.pnts .= s.xˢ; sim.body.velocity.pnts .= s.ẋˢ;
+end
 
-function force(b::DynamicBody,sim::Simulation)
-    reduce(hcat,[ParametricBodies.NurbsForce(b.surf,sim.flow.p,s) for s ∈ integration_points])'
+# overwrite the momentum function so that we get the correct BC
+@fastmath function WaterLily.mom_step!(a::Flow,b::AbstractPoisson)
+    a.u⁰ .= a.u; a.u .= 0
+    # predictor u → u'
+    WaterLily.conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U)
+    WaterLily.project!(a,b); BC2!(a.u,a.U)
+    # corrector u → u¹
+    WaterLily.conv_diff!(a.f,a.u,a.σ,ν=a.ν)
+    WaterLily.BDIM!(a); BC2!(a.u,a.U,2)
+    WaterLily.project!(a,b,2); a.u ./= 2; BC2!(a.u,a.U)
+    push!(a.Δt,WaterLily.CFL(a))
+end
+
+# BC function using the profile
+function BC2!(a,A,f=1)
+    N,n = WaterLily.size_u(a)
+    for j ∈ 1:n, i ∈ 1:n
+        if i==j # Normal direction, impose profile on inlet and outlet
+            for s ∈ (1,2,N[j])
+                @WaterLily.loop a[I,i] = f*A[i] over I ∈ WaterLily.slice(N,s,j)
+            end
+        else  # Tangential directions, interpolate ghost cell to no splip
+            @WaterLily.loop a[I,i] = -a[I+δ(j,I),i] over I ∈ WaterLily.slice(N,1,j)
+            @WaterLily.loop a[I,i] = -a[I-δ(j,I),i] over I ∈ WaterLily.slice(N,N[j],j)
+        end
+    end
 end
 
 # Material properties and mesh
@@ -19,6 +66,9 @@ ptRight = 1.0
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
 
+# make a structure, not actually used
+struc = DynamicFEOperator(mesh,gauss_rule,1,1,[],[],ρ=(x)->1; ρ∞=0.0)
+
 ## Simulation parameters
 L=2^4
 Re=500
@@ -27,45 +77,31 @@ U=1
 thk=2ϵ+√2
 
 # overload the distance function
-ParametricBodies.dis(p,n) = √(p'*p) - thk/2
+dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
 u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:]*L.+[3L,2L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
-body = DynamicBody(nurbs, (0,1));
+body = DynamicBody(nurbs, (0,1); dist=dis);
 
-# make a simulation
-sim = Simulation((4L,8L), (0,U), L; ν=U*L/Re, body, T=Float64)
+# make a simulation and a storage
+sim = Simulation((4L,6L),(U,0),L;U,ν=U*L/Re,body,ϵ,T=Float64)
+store = Store(sim)
 
-
-# make a problem
-Dirichlet_BC = [
-    Boundary1D("Dirichlet", ptRight, 0.0; comp=1),
-    Boundary1D("Dirichlet", ptRight, 0.0; comp=2)
-]
-Neumann_BC = [
-    Boundary1D("Neumann", ptRight, 0.0; comp=1),
-    Boundary1D("Neumann", ptRight, 0.0; comp=2)
-]
-p = EulerBeam(1, 1, x->0.0, mesh, gauss_rule, Dirichlet_BC, Neumann_BC)
-
-# location of integration points
-integration_points = Splines.uv_integration(p)
+# force function
+integration_points = uv_integration(struc)
 
 # coupling
 createSolverInterface("WaterLily", "./precice-config.xml", 0, 1)
-dimensions = PreCICE.getDimensions()
-numberOfVertices = 3
-writeData = force(body,sim)
+writeData = force(sim.body,sim.flow)
 
 vertices_n = Array{Float64,2}(undef, size(u⁰')...)
 vertices_f = Array{Float64,2}(undef, size(writeData)...)
 vertices_n .= mesh.controlPoints[1:2,:]'
 vertices_f[:,1] = integration_points
 vertices_f[:,2] .= 0.0
-
 
 # get mesh ID
 ID_n = PreCICE.getMeshID("Nurbs-Mesh-Fluid")
@@ -78,10 +114,9 @@ vertexIDs_n = PreCICE.setMeshVertices(ID_n, vertices_n)
 vertexIDs_f = PreCICE.setMeshVertices(ID_f, vertices_f)
 
 let # setting local scope for dt outside of the while loop
-    ids = 1
-    PreCICE.initialize()
+    dt_precice = PreCICE.initialize()
 
-    dt = 0.2
+    dt = min(0.25, dt_precice)
     PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
     markActionFulfilled(actionWriteInitialData())
 
@@ -90,27 +125,27 @@ let # setting local scope for dt outside of the while loop
 
     # reading initial data
     if PreCICE.isReadDataAvailable()
-        # println("WaterLily: Reading initial data")
         readData = PreCICE.readBlockVectorData(DataID_n, vertexIDs_n)
         readData .= u⁰' + readData.*L
         ParametricBodies.update!(body,Matrix(readData'),dt)
     end
 
     # simulations time
-    t = 0.0 
+    t = 0.0;
 
     while PreCICE.isCouplingOngoing()
 
+        # set time step
+        dt = min(dt, dt_precice)
+        sim.flow.Δt[end] = dt
+
         if PreCICE.isActionRequired(PreCICE.actionWriteIterationCheckpoint())
-            # println("WaterLily: Writing iteration checkpoint")
-            WaterLily.store!(sim.flow)
+            store!(store,sim)
             markActionFulfilled(actionWriteIterationCheckpoint())
         end
 
         if PreCICE.isReadDataAvailable()
-            # println("WaterLily: Reading data")
             readData = PreCICE.readBlockVectorData(DataID_n, vertexIDs_n)
-            display(readData)
             readData .= u⁰' + readData.*L
             ParametricBodies.update!(body,Matrix(readData'),dt)
         end
@@ -119,17 +154,14 @@ let # setting local scope for dt outside of the while loop
         measure!(sim,t); mom_step!(sim.flow,sim.pois)
         
         if PreCICE.isWriteDataRequired(dt)
-            # println("WaterLily: Writing data")
-            writeData = force(body,sim)
-            display(writeData)
+            writeData = force(sim.body,sim.flow)
             PreCICE.writeBlockVectorData(DataID_f, vertexIDs_f, writeData)
         end
         
-        PreCICE.advance(dt)
+        dt_precice = PreCICE.advance(dt)
 
         if PreCICE.isActionRequired(PreCICE.actionReadIterationCheckpoint())
-            # println("WaterLily: Reading iteration checkpoint")
-            WaterLily.revert!(sim.flow)
+            revert!(store,sim)
             markActionFulfilled(actionReadIterationCheckpoint())
         end
 

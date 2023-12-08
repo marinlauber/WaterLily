@@ -61,7 +61,7 @@
 
     <coupling-scheme:parallel-implicit>
       <participants first="WaterLily" second="Splines"/>
-      <max-time value="1.0" />
+      <max-time value="32.0" />
       <time-window-size value="0.2" />
       <max-iterations value="50" />
       <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>

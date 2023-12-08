@@ -39,3 +39,9 @@ function sim_gif!(sim;duration=1,step=0.1,verbose=true,R=inside(sim.flow.p),
             ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
+
+function vector_plot!(u::AbstractArray)
+    x,y=repeat(axes(u,1),outer=length(axes(u,2))),repeat(axes(u,2),inner=length(axes(u,1)))
+    us = u.*.√sum(u.^2,dims=length(size(u)));
+    quiver!(x,y,quiver=([us[:,:,1]...],[us[:,:,2]...]))
+end

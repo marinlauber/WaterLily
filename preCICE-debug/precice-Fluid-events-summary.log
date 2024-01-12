@@ -1,0 +1,47 @@
+Run finished at Fri Jan 12 13:59:26 2024
+Global runtime       = 10929ms / 10.929s
+Number of processors = 1
+# Rank: 0
+
+                                          Event |      Count |  Total[ms] |    Max[ms] |    Min[ms] |    Avg[ms] | Time Ratio |
+-------------------------------------------------------------------------------------------------------------------------------
+                                        _GLOBAL |          1 |      10929 |      10929 |      10929 |      10929 |          1 |
+                                        advance |          4 |         68 |         44 |          0 |         17 |    0.00622 |
+                        advance/m2n.receiveData |          4 |          0 |          0 |          0 |          0 |          0 |
+                           advance/m2n.sendData |          4 |          0 |          0 |          0 |          0 |          0 |
+                                      configure |          1 |          0 |          0 |          0 |          0 |          0 |
+                                       finalize |          1 |          0 |          0 |          0 |          0 |          0 |
+                                     initialize |          1 |      10719 |      10719 |      10719 |      10719 |      0.981 |
+    initialize/m2n.broadcastVertexDistributions |          1 |          0 |          0 |          0 |          0 |          0 |
+           initialize/m2n.buildCommunicationMap |          1 |          0 |          0 |          0 |          0 |          0 |
+            initialize/m2n.createCommunications |          1 |          2 |          2 |          2 |          2 |   0.000183 |
+      initialize/m2n.exchangeVertexDistribution |          1 |         90 |         90 |         90 |         90 |    0.00823 |
+         initialize/m2n.requestMasterConnection |          1 |      10625 |      10625 |      10625 |      10625 |      0.972 |
+         initialize/m2n.requestSlavesConnection |          1 |         93 |         93 |         93 |         93 |    0.00851 |
+     initialize/partition.gatherMesh.Nurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+    initialize/partition.prepareMesh.Nurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+ initialize/partition.sendGlobalMesh.Nurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+                                 solver.advance |          4 |          2 |          2 |          0 |          0 |   0.000183 |
+                              solver.initialize |          1 |        138 |        138 |        138 |        138 |     0.0126 |
+
+
+                                           Name |        Max |  MaxOnRank |        Min |  MinOnRank |    Min/Max |
+------------------------------------------------------------------------------------------------------------------
+                                        _GLOBAL |      10929 |          0 |      10929 |          0 |          1 |
+                                        advance |         44 |          0 |          0 |          0 |          0 |
+                        advance/m2n.receiveData |          0 |          0 |          0 |          0 |          0 |
+                           advance/m2n.sendData |          0 |          0 |          0 |          0 |          0 |
+                                      configure |          0 |          0 |          0 |          0 |          0 |
+                                       finalize |          0 |          0 |          0 |          0 |          0 |
+                                     initialize |      10719 |          0 |      10719 |          0 |          1 |
+    initialize/m2n.broadcastVertexDistributions |          0 |          0 |          0 |          0 |          0 |
+           initialize/m2n.buildCommunicationMap |          0 |          0 |          0 |          0 |          0 |
+            initialize/m2n.createCommunications |          2 |          0 |          2 |          0 |          1 |
+      initialize/m2n.exchangeVertexDistribution |         90 |          0 |         90 |          0 |          1 |
+         initialize/m2n.requestMasterConnection |      10625 |          0 |      10625 |          0 |          1 |
+         initialize/m2n.requestSlavesConnection |         93 |          0 |         93 |          0 |          1 |
+     initialize/partition.gatherMesh.Nurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+    initialize/partition.prepareMesh.Nurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+ initialize/partition.sendGlobalMesh.Nurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+                                 solver.advance |          2 |          0 |          0 |          0 |          0 |
+                              solver.initialize |        138 |          0 |        138 |          0 |          1 |

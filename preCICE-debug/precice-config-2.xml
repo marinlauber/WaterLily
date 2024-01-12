@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<precice-configuration>
+  <log>
+    <sink
+      type="stream"
+      output="stdout"
+      filter="%Severity% > debug"
+      format="preCICE:%ColorizedSeverity% %Message%"
+      enabled="true" />
+  </log>
+
+ <solver-interface dimensions="3">   
+  <data:vector name="Displacements" />
+  <data:vector name="Forces" />
+
+  <mesh name="Nurbs-Mesh">
+    <use-data name="Displacements" />
+    <use-data name="Forces" />
+  </mesh>
+
+  <mesh name="Forces-Mesh">
+    <use-data name="Displacements" />
+    <use-data name="Forces" />
+  </mesh>
+
+  <participant name="Fluid">
+    <use-mesh name="Nurbs-Mesh" provide="true"/>
+    <write-data name="Displacements" mesh="Nurbs-Mesh" />
+    <read-data name="Forces" mesh="Nurbs-Mesh" />
+  </participant>
+
+  <participant name="Solid">
+    <use-mesh name="Nurbs-Mesh" from="Fluid" />
+    <use-mesh name="Forces-Mesh" provide="true"/>
+    <mapping:nearest-neighbor
+      direction="write"
+      from="Forces-Mesh"
+      to="Nurbs-Mesh"
+      constraint="conservative" />
+    <mapping:nearest-neighbor
+      direction="read"
+      from="Nurbs-Mesh"
+      to="Forces-Mesh"
+      constraint="consistent" />
+    <write-data name="Forces" mesh="Forces-Mesh" />
+    <read-data name="Displacements" mesh="Forces-Mesh" />
+  </participant>
+
+  <m2n:sockets from="Fluid" to="Solid" />
+
+  <coupling-scheme:serial-implicit>
+    <participants first="Fluid" second="Solid" />
+    <max-time-windows value="2" />
+    <time-window-size value="1.0" />
+    <max-iterations value="2" />
+    <min-iteration-convergence-measure min-iterations="5" data="Displacements" mesh="Nurbs-Mesh" />
+    <exchange data="Displacements" mesh="Nurbs-Mesh" from="Fluid" to="Solid" />
+    <exchange data="Forces" mesh="Nurbs-Mesh" from="Solid" to="Fluid" />
+  </coupling-scheme:serial-implicit>
+  </solver-interface>
+</precice-configuration>

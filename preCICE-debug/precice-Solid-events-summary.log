@@ -1,0 +1,65 @@
+Run finished at Fri Jan 12 13:59:26 2024
+Global runtime       = 306ms / 0.306s
+Number of processors = 1
+# Rank: 0
+
+                                                                           Event |      Count |  Total[ms] |    Max[ms] |    Min[ms] |    Avg[ms] | Time Ratio |
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                         _GLOBAL |          1 |        306 |        306 |        306 |        306 |          1 |
+                                                                         advance |          4 |         45 |         44 |          0 |         11 |      0.147 |
+                                                         advance/m2n.receiveData |          3 |         44 |         44 |          0 |         14 |      0.144 |
+                                                            advance/m2n.sendData |          4 |          0 |          0 |          0 |          0 |          0 |
+                       advance/map.nn.computeMapping.FromForces-MeshToNurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+    advance/map.nn.computeMapping.FromForces-MeshToNurbs-Mesh.getIndexOnVertices |          1 |          0 |          0 |          0 |          0 |          0 |
+                              advance/map.nn.mapData.FromForces-MeshToNurbs-Mesh |          4 |          0 |          0 |          0 |          0 |          0 |
+                              advance/map.nn.mapData.FromNurbs-MeshToForces-Mesh |          3 |          0 |          0 |          0 |          0 |          0 |
+                               advance/query.index.getVertexIndexTree.Nurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+                                                                       configure |          1 |          0 |          0 |          0 |          0 |          0 |
+                                                                        finalize |          1 |          0 |          0 |          0 |          0 |          0 |
+                                                                      initialize |          1 |        118 |        118 |        118 |        118 |      0.386 |
+                                           initialize/m2n.acceptMasterConnection |          1 |          2 |          2 |          2 |          2 |    0.00654 |
+                                           initialize/m2n.acceptSlavesConnection |          1 |         50 |         50 |         50 |         50 |      0.163 |
+                                     initialize/m2n.broadcastVertexDistributions |          1 |          0 |          0 |          0 |          0 |          0 |
+                                            initialize/m2n.buildCommunicationMap |          1 |          0 |          0 |          0 |          0 |          0 |
+                                             initialize/m2n.createCommunications |          1 |          2 |          2 |          2 |          2 |    0.00654 |
+                                       initialize/m2n.exchangeVertexDistribution |          1 |         48 |         48 |         48 |         48 |      0.157 |
+                                                      initialize/m2n.receiveData |          1 |         21 |         21 |         21 |         21 |     0.0686 |
+                    initialize/map.nn.computeMapping.FromNurbs-MeshToForces-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+ initialize/map.nn.computeMapping.FromNurbs-MeshToForces-Mesh.getIndexOnVertices |          1 |          0 |          0 |          0 |          0 |          0 |
+                           initialize/map.nn.mapData.FromNurbs-MeshToForces-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+                                    initialize/partition.prepareMesh.Forces-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+                               initialize/partition.receiveGlobalMesh.Nurbs-Mesh |          1 |         42 |         42 |         42 |         42 |      0.137 |
+                            initialize/query.index.getVertexIndexTree.Nurbs-Mesh |          1 |          0 |          0 |          0 |          0 |          0 |
+                                                                  solver.advance |          4 |          2 |          2 |          0 |          0 |    0.00654 |
+                                                               solver.initialize |          1 |        138 |        138 |        138 |        138 |      0.451 |
+
+
+                                                                            Name |        Max |  MaxOnRank |        Min |  MinOnRank |    Min/Max |
+---------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                         _GLOBAL |        306 |          0 |        306 |          0 |          1 |
+                                                                         advance |         44 |          0 |          0 |          0 |          0 |
+                                                         advance/m2n.receiveData |         44 |          0 |          0 |          0 |          0 |
+                                                            advance/m2n.sendData |          0 |          0 |          0 |          0 |          0 |
+                       advance/map.nn.computeMapping.FromForces-MeshToNurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+    advance/map.nn.computeMapping.FromForces-MeshToNurbs-Mesh.getIndexOnVertices |          0 |          0 |          0 |          0 |          0 |
+                              advance/map.nn.mapData.FromForces-MeshToNurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+                              advance/map.nn.mapData.FromNurbs-MeshToForces-Mesh |          0 |          0 |          0 |          0 |          0 |
+                               advance/query.index.getVertexIndexTree.Nurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+                                                                       configure |          0 |          0 |          0 |          0 |          0 |
+                                                                        finalize |          0 |          0 |          0 |          0 |          0 |
+                                                                      initialize |        118 |          0 |        118 |          0 |          1 |
+                                           initialize/m2n.acceptMasterConnection |          2 |          0 |          2 |          0 |          1 |
+                                           initialize/m2n.acceptSlavesConnection |         50 |          0 |         50 |          0 |          1 |
+                                     initialize/m2n.broadcastVertexDistributions |          0 |          0 |          0 |          0 |          0 |
+                                            initialize/m2n.buildCommunicationMap |          0 |          0 |          0 |          0 |          0 |
+                                             initialize/m2n.createCommunications |          2 |          0 |          2 |          0 |          1 |
+                                       initialize/m2n.exchangeVertexDistribution |         48 |          0 |         48 |          0 |          1 |
+                                                      initialize/m2n.receiveData |         21 |          0 |         21 |          0 |          1 |
+                    initialize/map.nn.computeMapping.FromNurbs-MeshToForces-Mesh |          0 |          0 |          0 |          0 |          0 |
+ initialize/map.nn.computeMapping.FromNurbs-MeshToForces-Mesh.getIndexOnVertices |          0 |          0 |          0 |          0 |          0 |
+                           initialize/map.nn.mapData.FromNurbs-MeshToForces-Mesh |          0 |          0 |          0 |          0 |          0 |
+                                    initialize/partition.prepareMesh.Forces-Mesh |          0 |          0 |          0 |          0 |          0 |
+                               initialize/partition.receiveGlobalMesh.Nurbs-Mesh |         42 |          0 |         42 |          0 |          1 |
+                            initialize/query.index.getVertexIndexTree.Nurbs-Mesh |          0 |          0 |          0 |          0 |          0 |
+                                                                  solver.advance |          2 |          0 |          0 |          0 |          0 |
+                                                               solver.initialize |        138 |          0 |        138 |          0 |          1 |

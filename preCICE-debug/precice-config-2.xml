@@ -15,22 +15,21 @@
 
   <mesh name="Nurbs-Mesh">
     <use-data name="Displacements" />
-    <use-data name="Forces" />
   </mesh>
 
   <mesh name="Forces-Mesh">
-    <use-data name="Displacements" />
     <use-data name="Forces" />
   </mesh>
 
   <participant name="Fluid">
-    <use-mesh name="Nurbs-Mesh" provide="true"/>
+    <use-mesh name="Nurbs-Mesh" from="Solid"/>
+    <use-mesh name="Forces-Mesh" from="Solid"/>
     <write-data name="Displacements" mesh="Nurbs-Mesh" />
-    <read-data name="Forces" mesh="Nurbs-Mesh" />
+    <read-data name="Forces" mesh="Forces-Mesh" />
   </participant>
 
   <participant name="Solid">
-    <use-mesh name="Nurbs-Mesh" from="Fluid" />
+    <use-mesh name="Nurbs-Mesh" provide="true" />
     <use-mesh name="Forces-Mesh" provide="true"/>
     <mapping:nearest-neighbor
       direction="write"

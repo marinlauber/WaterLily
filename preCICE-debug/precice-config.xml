@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<precice-configuration>
+  <log>
+    <sink
+      type="stream"
+      output="stdout"
+      filter="(%Severity% >= debug) and not (%Rank% != 0)"
+      format="WaterLily-Splines:%ColorizedSeverity% %Message%"
+      enabled="true" />
+  </log>
+
+  <data:vector name="Forces"/>
+  <data:vector name="Displacements"/>
+
+  <mesh name="Nurbs-Mesh-Fluid" dimensions="2">
+    <use-data name="Displacements"/>
+  </mesh>
+
+  <mesh name="Force-Mesh-Fluid" dimensions="2">
+    <use-data name="Forces"/>
+  </mesh>
+
+  <mesh name="Nurbs-Mesh-Solid" dimensions="2">
+    <use-data name="Displacements"/>
+  </mesh>
+
+  <mesh name="Force-Mesh-Solid" dimensions="2">
+    <use-data name="Forces"/>
+  </mesh>
+
+  <participant name="Splines">
+    <provide-mesh name="Nurbs-Mesh-Solid" />
+    <provide-mesh name="Force-Mesh-Solid" />
+    <write-data name="Displacements" mesh="Nurbs-Mesh-Solid" />
+    <read-data  name="Forces" mesh="Force-Mesh-Solid" />
+  </participant>
+
+  <participant name="WaterLily">
+    <provide-mesh name="Nurbs-Mesh-Fluid" />
+    <provide-mesh name="Force-Mesh-Fluid" />
+    <receive-mesh name="Force-Mesh-Solid" from="Splines" />
+    <receive-mesh name="Nurbs-Mesh-Solid" from="Splines" />
+    <write-data name="Forces" mesh="Force-Mesh-Fluid" />
+    <read-data  name="Displacements" mesh="Nurbs-Mesh-Fluid" />
+    <mapping:nearest-neighbor
+      direction="write"
+      from="Force-Mesh-Fluid" 
+      to="Force-Mesh-Solid"
+      constraint="conservative"/>
+    <mapping:nearest-neighbor
+      direction="read"
+      from="Nurbs-Mesh-Solid" 
+      to="Nurbs-Mesh-Fluid"
+      constraint="consistent"/>
+  </participant>
+
+  <m2n:sockets acceptor="WaterLily" connector="Splines" exchange-directory=".."/>
+
+  <coupling-scheme:parallel-implicit>
+    <participants first="WaterLily" second="Splines"/>
+    <max-time value="1" />
+    <time-window-size value="0.2" />
+    <max-iterations value="50" />
+    <exchange data="Displacements" mesh="Nurbs-Mesh-Solid" from="Splines"   to="WaterLily" initialize="true"/>
+    <exchange data="Forces"        mesh="Force-Mesh-Solid" from="WaterLily" to="Splines"   initialize="true"/>
+    <relative-convergence-measure limit="1e-4" data="Displacements" mesh="Nurbs-Mesh-Solid"/>
+    <relative-convergence-measure limit="1e-4" data="Forces"        mesh="Force-Mesh-Solid"/>
+    <acceleration:IQN-ILS>
+      <data name="Displacements" mesh="Nurbs-Mesh-Solid" />
+      <data name="Forces"        mesh="Force-Mesh-Solid" />
+      <initial-relaxation value="0.05" />
+      <max-used-iterations value="20" />
+      <time-windows-reused value="20" />
+      <preconditioner type="residual-sum" />
+      <filter type="QR2" limit="1.e-2" />
+    </acceleration:IQN-ILS>
+  </coupling-scheme:parallel-implicit>
+
+</precice-configuration>

@@ -138,7 +138,6 @@ end
 smooth!(p) = pcg!(p)
 
 L₂(p::Poisson) = p.r ⋅ p.r # special method since outside(p.r)≡0
-L∞(p::Poisson) = maximum(abs.(p.r))
 
 """
     solver!(A::Poisson;log,tol,itmx)

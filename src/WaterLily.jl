@@ -69,7 +69,7 @@ struct Simulation <: AbstractSimulation
     end
 end
 
-time(sim::AbstractSimulation) = sum(sim.flow.Δt[1:end-1])
+time(sim::AbstractSimulation) = time(sim.flow)
 """
     sim_time(sim::Simulation)
 
@@ -103,12 +103,12 @@ end
 
 Measure a dynamic `body` to update the `flow` and `pois` coefficients.
 """
-function measure!(sim::Simulation,t=timeNext(sim.flow))
+function measure!(sim::AbstractSimulation,t=timeNext(sim.flow))
     measure!(sim.flow,sim.body;t,ϵ=sim.ϵ)
     update!(sim.pois)
 end
 
-export Simulation,sim_step!,sim_time,measure!
+export AbstractSimulation,Simulation,sim_step!,sim_time,measure!
 
 # default WriteVTK functions
 function vtkWriter end

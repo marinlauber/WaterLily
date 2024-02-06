@@ -88,21 +88,50 @@ body = DynamicBody(nurbs, (0,1); dist=dis);
 integration_points = uv_integration(struc)
 
 # make a simulation
-sim = CoupledSimulation((4L,6L),(0,U),L,body,struc,IQNCoupling;
+sim = CoupledSimulation((4L,6L),(0,U),L,body,struc,Relaxation;
                          ν=U*L/Re,ϵ,ωᵣ=0.5,maxCol=6,T=Float64)
 
 # duration of the simulation
-t₀ = 0.0; duration = 10.0; step = 0.1
+t₀ = 0.0; duration = 1.0; step = 0.1
 
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
 
     # integrate up to time tᵢ
-    sim_step!(sim,tᵢ)
+    # sim_step!(sim,tᵢ)
+    t = sum(sim.flow.Δt[1:end-1])
+    # @show t
+    while t < tᵢ*sim.L/sim.U
+        store!(sim); iter=1
+        # @show t
+        while true
+            # update structure
+            solve_step!(sim.struc,sim.forces,sim.flow.Δt[end]/sim.L)
+            # update body
+            ParametricBodies.update!(sim.body,u⁰+L*sim.pnts,sim.flow.Δt[end])
+            # update flow
+            measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            # compute new coupling variable
+            sim.forces.=force(sim.body,sim.flow); sim.pnts.=points(sim.struc)
+            # check convergence and accelerate
+            print("    iteration: ",iter)
+            print(" ")
+            @show sum(sim.forces,dims=2)
+            converged = update!(sim.cpl,sim.pnts,sim.forces,0.0)
+            # revert!(xᵏ,sim.pnts,sim.forces,sim.cpl.subs)
+            (converged || iter+1 > 50) && break
+            # revert if not convergend
+            revert!(sim); iter+=1
+        end
+        #update time
+        t += sim.flow.Δt[end]
+        println("tU/L=",round(t*sim.U/sim.L,digits=4),
+                           ", Δt=",round(sim.flow.Δt[end],digits=3))
+    end
 
     # plot nice stuff
-    get_omega!(sim); plot_vorticity(sim.flow.σ', limit=10)
+    get_omega!(sim); plot_vorticity(sim.flow.p', limit=1)
     c = [body.surf(s,0.0) for s ∈ 0:0.01:1]
-    plot!(getindex.(c,2).+0.5,getindex.(c,1).+0.5,linewidth=2,color=:black,yflip = true)
+    plot!(getindex.(c,2),getindex.(c,1),linewidth=2,color=:black,yflip = true)
     plot!(title="tU/L $tᵢ")
 end

@@ -1,8 +1,10 @@
 using WaterLily
 using ParametricBodies
 using Splines
+
 using StaticArrays
 using LinearAlgebra
+
 include("examples/TwoD_plots.jl")
 include("Coupling.jl")
 
@@ -33,7 +35,7 @@ Neumann_BC = []
 
 # make a structure
 struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, 
-                         Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
+                          Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
 
 ## Simulation parameters
 L=2^4

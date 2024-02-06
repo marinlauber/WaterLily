@@ -83,13 +83,13 @@ end
 mult!(ml::MultiLevelPoisson,x) = mult!(ml.levels[1],x)
 residual!(ml::MultiLevelPoisson,x) = residual!(ml.levels[1],x)
 
-function solver!(ml::MultiLevelPoisson;log=false,tol=1e-6,itmx=32)
+function solver!(ml::MultiLevelPoisson;log=false,tol=1e-6,itmx=64)
     p = ml.levels[1]
     BC!(p.x;perdir=p.perdir)
     residual!(p); r₂ = L₂(p)
     log && (res = [r₂])
     nᵖ=0
-    while r₂>tol && nᵖ<itmx
+    while (r₂>tol || nᵖ==0) && nᵖ<itmx
         Vcycle!(ml)
         smooth!(p); r₂ = L₂(p)
         log && push!(res,r₂)

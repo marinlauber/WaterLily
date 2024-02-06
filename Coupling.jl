@@ -65,7 +65,7 @@ struct CoupledSimulation <: AbstractSimulation
             zeros(size(body.velocity.pnts)))
     end
 end
-function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
+function sim_step!(sim::CoupledSimulation,t_end;verbose=true)
     t = sum(sim.flow.Δt[1:end-1])
     # @show t
     while t < t_end*sim.L/sim.U

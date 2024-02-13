@@ -23,10 +23,10 @@ export AutoBody,measure,sdf,+,-
 
 include("Metrics.jl")
 
-# include("Coupling.jl")
-# export Relaxation, IQNCoupling, update, res
-
 abstract type AbstractSimulation end
+
+# include("Coupling.jl")
+# export CoupledSimulation,store!,revert!,update!,finalize!,Relaxation,IQNCoupling
 
 """
     Simulation(dims::NTuple, u_BC::NTuple, L::Number;
@@ -42,12 +42,12 @@ Constructor for a WaterLily.jl simulation:
   - `L`: Simulation length scale.
   - `U`: Simulation velocity scale.
   - `Δt`: Initial time step.
-  - `ν`: Scaled viscosity (`Re=UL/ν`).
+  - `g`: Domain acceleration, `g(i,t)=duᵢ/dt`
   - `ϵ`: BDIM kernel width.
   - `uλ`: Function to generate the initial velocity field.
   - `body`: Immersed geometry.
   - `T`: Array element type.
-  - `mem`: memory location. `Array` and `CuArray` run on CPU and CUDA backends, respectively.
+  - `mem`: memory location. `Array`, `CuArray`, `ROCm` to run on CPU, NVIDIA, or AMD devices, respectively.
 
 See files in `examples` folder for examples.
 """
@@ -59,12 +59,12 @@ struct Simulation <: AbstractSimulation
     body :: AbstractBody
     pois :: AbstractPoisson
     function Simulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number;
-                        Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1,
-                        uλ::Function=(i,x)->u_BC[i],
+                        Δt=0.25, ν=0., g=nothing, U=√sum(abs2,u_BC), ϵ=1, perdir=(0,),
+                        uλ::Function=(i,x)->u_BC[i], exitBC=false,
                         body::AbstractBody=NoBody(),T=Float32,mem=Array) where N
-        flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem)
+        flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC)
         measure!(flow,body;ϵ)
-        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ))
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ;perdir))
     end
 end
 

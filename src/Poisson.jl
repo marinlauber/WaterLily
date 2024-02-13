@@ -27,12 +27,13 @@ struct Poisson{T,S<:AbstractArray{T},V<:AbstractArray{T}} <: AbstractPoisson{T,S
     r :: S # residual
     z :: S # source
     n :: Vector{Int16} # pressure solver iterations
-    function Poisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T}) where T
+    perdir :: NTuple # direction of periodic boundary condition
+    function Poisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};perdir=(0,)) where T
         @assert axes(x) == axes(z) && axes(x) == Base.front(axes(L)) && last(axes(L)) == eachindex(axes(x))
         r = similar(x); fill!(r,0)
         ϵ,D,iD = copy(r),copy(r),copy(r)
         set_diag!(D,iD,L)
-        new{T,typeof(x),typeof(L)}(L,D,iD,x,ϵ,r,z,[])
+        new{T,typeof(x),typeof(L)}(L,D,iD,x,ϵ,r,z,[],perdir)
     end
 end
 
@@ -120,7 +121,6 @@ function pcg!(p::Poisson;it=6)
     end
 end
 smooth!(p) = pcg!(p)
-# smooth!(p) = get_backend(p.r)==CPU() ? SOR!(p,it=3) : Jacobi!(p,it=20)
 
 L₂(p::Poisson) = p.r ⋅ p.r # special method since outside(p.r)≡0
 

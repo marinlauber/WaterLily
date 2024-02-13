@@ -1,20 +1,20 @@
 using LinearAlgebra: norm,dot
 include("QRFactorization.jl")
 
-function writetxt(string, v::Vector{Float64})
-    open(string*".txt","w") do io
-        for i in 1:length(v)
-            println(io, v[i])
-        end
-    end
-end
-function writetxt(string, a::Matrix{Float64})
-    open(string*".txt","w") do io
-        for i in 1:size(a,1)
-            println(io, a[i,:])
-        end
-    end
-end
+# function writetxt(string, v::Vector{Float64})
+#     open(string*".txt","w") do io
+#         for i in 1:length(v)
+#             println(io, v[i])
+#         end
+#     end
+# end
+# function writetxt(string, a::Matrix{Float64})
+#     open(string*".txt","w") do io
+#         for i in 1:size(a,1)
+#             println(io, a[i,:])
+#         end
+#     end
+# end
 
 # these are not really needed
 function concatenate!(vec, a, b, subs)

@@ -4,6 +4,10 @@
 @fastmath quick(u,c,d) = median((5c+2d-u)/6,c,median(10c-9u,c,d))
 @fastmath vanLeer(u,c,d) = (c≤min(u,d) || c≥max(u,d)) ? c : c+(d-c)*(c-u)/(d-u)
 @inline ϕu(a,I,f,u,λ=quick) = @inbounds u>0 ? u*λ(f[I-2δ(a,I)],f[I-δ(a,I)],f[I]) : u*λ(f[I+δ(a,I)],f[I],f[I-δ(a,I)])
+@inline ϕuP(a,Ip,I,f,u,λ=quick) = @inbounds u>0 ? u*λ(f[Ip],f[I-δ(a,I)],f[I]) : u*λ(f[I+δ(a,I)],f[I],f[I-δ(a,I)])
+@inline ϕuL(a,I,f,u,λ=quick) = @inbounds u>0 ? u*ϕ(a,I,f) : u*λ(f[I+δ(a,I)],f[I],f[I-δ(a,I)])
+@inline ϕuR(a,I,f,u,λ=quick) = @inbounds u<0 ? u*ϕ(a,I,f) : u*λ(f[I-2δ(a,I)],f[I-δ(a,I)],f[I])
+
 @fastmath @inline function div(I::CartesianIndex{m},u) where {m}
     init=zero(eltype(u))
     for i in 1:m
@@ -41,6 +45,27 @@ function conv_diff!(r,u,Φ;ν=0.1)
     end
 end
 
+# Neumann BC Building block
+lowerBoundary!(r,u,Φ,ν,i,j,N,::Val{false}) = @loop r[I,i] += ϕuL(j,CI(I,i),u,ϕ(i,CI(I,j),u)) - ν*∂(j,CI(I,i),u) over I ∈ slice(N,2,j,2)
+upperBoundary!(r,u,Φ,ν,i,j,N,::Val{false}) = @loop r[I-δ(j,I),i] += -ϕuR(j,CI(I,i),u,ϕ(i,CI(I,j),u)) + ν*∂(j,CI(I,i),u) over I ∈ slice(N,N[j],j,2)
+
+# Periodic BC Building block
+lowerBoundary!(r,u,Φ,ν,i,j,N,::Val{true}) = @loop (
+    Φ[I] = ϕuP(j,CIj(j,CI(I,i),N[j]-2),CI(I,i),u,ϕ(i,CI(I,j),u)) -ν*∂(j,CI(I,i),u); r[I,i] += Φ[I]) over I ∈ slice(N,2,j,2)
+upperBoundary!(r,u,Φ,ν,i,j,N,::Val{true}) = @loop r[I-δ(j,I),i] -= Φ[CIj(j,I,2)] over I ∈ slice(N,N[j],j,2)
+
+using EllipsisNotation
+"""
+    accelerate!(r,t,g)
+
+This function adds a uniform acceleration field `g` at time `t` to `r`.
+If `g ≠ nothing`, then `g(i,t)=dUᵢ/dt`.
+"""
+accelerate!(r,t,g) = for i ∈ 1:last(size(r))
+    r[..,i] .+= g(i,t)
+end
+accelerate!(r,t,::Nothing) = nothing
+
 """
     Flow{D::Int, T::Float, Sf<:AbstractArray{T,D}, Vf<:AbstractArray{T,D+1}, Tf<:AbstractArray{T,D+2}}
 
@@ -55,10 +80,8 @@ struct Flow{D, T, Sf<:AbstractArray{T}, Vf<:AbstractArray{T}, Tf<:AbstractArray{
     # Fluid fields
     u :: Vf # velocity vector field
     u⁰:: Vf # previous velocity
-    uˢ:: Vf # stored velocity
     f :: Vf # force vector
     p :: Sf # pressure scalar field
-    pˢ:: Sf # stored pressure field
     σ :: Sf # divergence scalar
     # BDIM fields
     V :: Vf # body velocity vector
@@ -69,22 +92,27 @@ struct Flow{D, T, Sf<:AbstractArray{T}, Vf<:AbstractArray{T}, Tf<:AbstractArray{
     U :: NTuple{D, T} # domain boundary values
     Δt:: Vector{T} # time step (stored in CPU memory)
     ν :: T # kinematic viscosity
-    function Flow(N::NTuple{D}, U::NTuple{D}; f=Array, Δt=0.25, ν=0., uλ::Function=(i, x) -> 0., T=Float64) where D
+    g :: Union{Function,Nothing} # (possibly time-varuing) uniform acceleration field
+    exitBC :: Bool # Convective exit
+    perdir :: NTuple # direction of periodic boundary condition
+    function Flow(N::NTuple{D}, U::NTuple{D}; f=Array, Δt=0.25, ν=0., g=nothing,
+                  uλ::Function=(i, x) -> 0., perdir=(0,), exitBC=false, T=Float64) where D
         Ng = N .+ 2
         Nd = (Ng..., D)
         u = Array{T}(undef, Nd...) |> f; apply!(uλ, u); BC!(u, U)
-        u⁰ = copy(u); uˢ = copy(u)
+        u⁰ = copy(u)
         fv, p, σ = zeros(T, Nd) |> f, zeros(T, Ng) |> f, zeros(T, Ng) |> f
-        pˢ = copy(p)
-        V, σᵥ = zeros(T, Nd) |> f, zeros(T, Ng) |> f
-        μ₀ = ones(T, Nd) |> f
+        V, μ₀, μ₁ = zeros(T, Nd) |> f, ones(T, Nd) |> f, zeros(T, Ng..., D, D) |> f
         BC!(μ₀,ntuple(zero, D))
-        μ₁ = zeros(T, Ng..., D, D) |> f
-        new{D,T,typeof(p),typeof(u),typeof(μ₁)}(u,u⁰,uˢ,fv,p,pˢ,σ,V,σᵥ,μ₀,μ₁,U,T[Δt],ν)
+        σᵥ = zeros(T, Ng) |> f
+        new{D,T,typeof(p),typeof(u),typeof(μ₁)}(u,u⁰,fv,p,σ,V,σᵥ,μ₀,μ₁,U,T[Δt],ν,g,exitBC,perdir)
     end
 end
 
-function BDIM!(a::Flow{n}) where n
+time(flow::Flow) = sum(flow.Δt[1:end-1])
+timeNext(flow::Flow) = sum(flow.Δt)
+
+function BDIM!(a::Flow)
     dt = a.Δt[end]
     @loop a.f[Ii] = a.u⁰[Ii]+dt*a.f[Ii]-a.V[Ii] over Ii in CartesianIndices(a.f)
     @loop a.u[Ii] += μddn(Ii,a.μ₁,a.f)+a.V[Ii]+a.μ₀[Ii]*a.f[Ii] over Ii ∈ inside_u(size(a.p))
@@ -109,18 +137,20 @@ and the `AbstractPoisson` pressure solver to project the velocity onto an incomp
     a.u⁰ .= a.u; a.u .= 0
     # predictor u → u'
     conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
+    accelerate!(a.f,time(a),a.g)
     BDIM!(a); BC!(a.u,a.U)
     project!(a,b); BC!(a.u,a.U)
     # corrector u → u¹
     conv_diff!(a.f,a.u,a.σ,ν=a.ν)
+    accelerate!(a.f,timeNext(a),a.g)
     BDIM!(a); BC!(a.u,a.U,2)
     project!(a,b,2); a.u ./= 2; BC!(a.u,a.U)
     push!(a.Δt,CFL(a))
 end
 
-function CFL(a::Flow)
+function CFL(a::Flow;Δt_max=10)
     @inside a.σ[I] = flux_out(I,a.u)
-    min(10.,inv(maximum(a.σ)+5a.ν))
+    min(Δt_max,inv(maximum(a.σ)+5a.ν))
 end
 @fastmath @inline function flux_out(I::CartesianIndex{d},u) where {d}
     s = zero(eltype(u))

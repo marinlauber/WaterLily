@@ -157,36 +157,58 @@ function slice(dims::NTuple{N},i,j,low=1) where N
 end
 
 """
-    BC!(a,A,f=1)
+    BC!(a,A)
 
 Apply boundary conditions to the ghost cells of a _vector_ field. A Dirichlet
-condition `a[I,i]=f*A[i]` is applied to the vector component _normal_ to the domain
-boundary. For example `aₓ(x)=f*Aₓ ∀ x ∈ minmax(X)`. A zero Neumann condition
+condition `a[I,i]=A[i]` is applied to the vector component _normal_ to the domain
+boundary. For example `aₓ(x)=Aₓ ∀ x ∈ minmax(X)`. A zero Neumann condition
 is applied to the tangential components.
 """
-function BC!(a,A,f=1)
+function BC!(a,A,saveexit=false,perdir=(0,))
     N,n = size_u(a)
-    for j ∈ 1:n, i ∈ 1:n
-        if i==j # Normal direction, Dirichlet
-            for s ∈ (1,2,N[j])
-                @loop a[I,i] = f*A[i] over I ∈ slice(N,s,j)
+    for i ∈ 1:n, j ∈ 1:n
+        if j in perdir
+            @loop a[I,i] = a[CIj(j,I,N[j]-1),i] over I ∈ slice(N,1,j)
+            @loop a[I,i] = a[CIj(j,I,2),i] over I ∈ slice(N,N[j],j)
+        else
+            if i==j # Normal direction, Dirichlet
+                for s ∈ (1,2)
+                    @loop a[I,i] = A[i] over I ∈ slice(N,s,j)
+                end
+                (!saveexit || i>1) && (@loop a[I,i] = A[i] over I ∈ slice(N,N[j],j)) # overwrite exit
+            else    # Tangential directions, Neumann
+                @loop a[I,i] = a[I+δ(j,I),i] over I ∈ slice(N,1,j)
+                @loop a[I,i] = a[I-δ(j,I),i] over I ∈ slice(N,N[j],j)
             end
-        else    # Tangential directions, Neumann
-            @loop a[I,i] = a[I+δ(j,I),i] over I ∈ slice(N,1,j)
-            @loop a[I,i] = a[I-δ(j,I),i] over I ∈ slice(N,N[j],j)
         end
     end
 end
+"""
+    exitBC!(u,u⁰,U,Δt)
 
+Apply a 1D convection scheme to fill the ghost cell on the exit of the domain.
+"""
+function exitBC!(u,u⁰,U,Δt)
+    N,_ = size_u(u)
+    exitR = slice(N.-1,N[1],1,2)              # exit slice excluding ghosts
+    @loop u[I,1] = u⁰[I,1]-U[1]*Δt*(u⁰[I,1]-u⁰[I-δ(1,I),1]) over I ∈ exitR
+    ∮u = sum(u[exitR,1])/length(exitR)-U[1]   # mass flux imbalance
+    @loop u[I,1] -= ∮u over I ∈ exitR         # correct flux
+end
 """
     BC!(a)
 Apply zero Neumann boundary conditions to the ghost cells of a _scalar_ field.
 """
-function BC!(a)
+function BC!(a;perdir=(0,))
     N = size(a)
     for j ∈ eachindex(N)
-        @loop a[I] = a[I+δ(j,I)] over I ∈ slice(N,1,j)
-        @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
+        if j in perdir
+            @loop a[I] = a[CIj(j,I,N[j]-1)] over I ∈ slice(N,1,j)
+            @loop a[I] = a[CIj(j,I,2)] over I ∈ slice(N,N[j],j)
+        else
+            @loop a[I] = a[I+δ(j,I)] over I ∈ slice(N,1,j)
+            @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
+        end
     end
 end
 """

@@ -20,14 +20,15 @@ function restrictML(b::Poisson)
     Na = map(i->1+i÷2,N)
     aL = similar(b.L,(Na...,n)); fill!(aL,0)
     ax = similar(b.x,Na); fill!(ax,0)
-    restrictL!(aL,b.L)
-    Poisson(ax,aL,copy(ax))
+    restrictL!(aL,b.L,perdir=b.perdir)
+    Poisson(ax,aL,copy(ax);b.perdir)
 end
-function restrictL!(a,b)
+function restrictL!(a::AbstractArray{T},b;perdir=(0,)) where T
     Na,n = size_u(a)
     for i ∈ 1:n
         @loop a[I,i] = restrictL(I,i,b) over I ∈ CartesianIndices(map(n->2:n-1,Na))
     end
+    BC!(a,zeros(SVector{n,T}),false,perdir)  # correct μ₀ @ boundaries
 end
 restrict!(a,b) = @inside a[I] = restrict(I,b)
 prolongate!(a,b) = @inside a[I] = b[down(I)]
@@ -59,7 +60,7 @@ end
 function update!(ml::MultiLevelPoisson)
     update!(ml.levels[1])
     for l ∈ 2:length(ml.levels)
-        restrictL!(ml.levels[l].L,ml.levels[l-1].L)
+        restrictL!(ml.levels[l].L,ml.levels[l-1].L,perdir=ml.levels[l-1].perdir)
         update!(ml.levels[l])
     end
 end
@@ -75,6 +76,7 @@ function Vcycle!(ml::MultiLevelPoisson;l=1)
     smooth!(coarse)
     # correct fine
     prolongate!(fine.ϵ,coarse.x)
+    BC!(fine.ϵ;perdir=fine.perdir)
     increment!(fine)
 end
 
@@ -83,6 +85,7 @@ residual!(ml::MultiLevelPoisson,x) = residual!(ml.levels[1],x)
 
 function solver!(ml::MultiLevelPoisson;log=false,tol=1e-3,itmx=32)
     p = ml.levels[1]
+    BC!(p.x;perdir=p.perdir)
     residual!(p); r₂ = L₂(p)
     log && (res = [r₂])
     nᵖ=0
@@ -92,6 +95,7 @@ function solver!(ml::MultiLevelPoisson;log=false,tol=1e-3,itmx=32)
         log && push!(res,r₂)
         nᵖ+=1
     end
+    BC!(p.x;perdir=p.perdir)
     push!(ml.n,nᵖ)
     log && return res
 end

@@ -38,20 +38,17 @@ function measure!(a::Flow{N,T},body::AbstractBody;t=T(0),ϵ=1) where {N,T}
                 dᵢ,nᵢ,Vᵢ = measure(body,WaterLily.loc(i,I,T),t)
                 V[I,i] = Vᵢ[i]
                 μ₀[I,i] = WaterLily.μ₀(dᵢ,ϵ)
-                for j ∈ 1:N
-                    μ₁[I,i,j] = WaterLily.μ₁(dᵢ,ϵ)*nᵢ[j]
-                end
+                μ₁[I,i,:] .= WaterLily.μ₁(dᵢ,ϵ)*nᵢ
             end
         elseif d[I]<0
-            for i ∈ 1:N
-                μ₀[I,i] = 0
-            end
+            μ₀[I,:] .= 0
         end
     end
     @loop fill!(a.μ₀,a.μ₁,a.V,a.σᵥ,a.σ,I) over I ∈ inside(a.p)
+    BC!(a.μ₀,zeros(SVector{N,T}),a.exitBC,a.perdir) # BC on μ₀, don't fill normal component yet
+    BC!(a.V ,zeros(SVector{N,T}),a.exitBC,a.perdir)
     @inside a.σᵥ[I] = a.σᵥ[I]*div(I,a.V) # scaled divergence
     correct_div!(a.σᵥ)
-    BC!(a.μ₀,zeros(SVector{N,T}))          # fill BCs
 end
 
 # Convolution kernel and its moments

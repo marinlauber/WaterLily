@@ -6,19 +6,25 @@ function hover(L=2^5;Re=250,U=1,ϵ=1.0,thk=2ϵ+√2,T=Float32)
     end
     # Oscillating motion and rotation
     function map(x,t)
-        x - SA[6L-L*sin(t*U/L),6L]
+        α = 0.0
+        R = SA[cos(α) sin(α); -sin(α) cos(α)]
+        R*(x - SA[3L-L*sin(t*U/L),3L])
     end
-    Simulation((12L,12L),(0,0),L;U,ν=U*L/Re,body=AutoBody(sdf,map),ϵ,T)
+    Simulation((6L,6L),(0,0),L;U,ν=U*L/Re,body=AutoBody(sdf,map),ϵ,T),1
 end
-function cicrle(L=2^5;Re=250,U=1,ϵ=1.0,thk=2ϵ+√2,T=Float32)
+function cicrle(L=2^5;Re=250,U=1,Λ=1,ϵ=2.0,T=Float32)
     # circle SDF
     function sdf(x,t)
-        √sum(abs2, x .- 3L) - L/2
+        √sum(abs2, SA[x[1],x[2]/Λ]) - L/2/Λ
     end
-    Simulation((10L,6L),(1,0),L;U,ν=U*L/Re,body=AutoBody(sdf),ϵ,T)
+    # Oscillating motion and rotation
+    function map(x,t)
+        x - SA[3L-L*sin(t*U/L),3L]
+    end
+    Simulation((6L,6L),(0,0),L;U,ν=U*L/Re,body=AutoBody(sdf,map),ϵ,T),Λ
 end
-# sim = hover(;T=Float64);
-sim = cicrle(;T=Float64);
+sim,Λ = hover(;T=Float32);
+# sim,Λ = cicrle(;Λ=8,T=Float32);
 include("TwoD_plots.jl")
 duration=20;
 R=inside(sim.flow.p)
@@ -36,9 +42,9 @@ anim = @animate while sim_time(sim)<duration
     WaterLily.measure_sdf!(sim.flow.σ,sim.body,WaterLily.time(sim))
     contour!(p1,sim.flow.σ[R]';levels=[0],lines=:black)
     p2 = plot(reshape(copy(sim.pois.n),(2,:))',ylim=(0,32))
-    p3 = plot(drag,ylim=(-2,0))
+    p3 = plot(drag,ylim=(-10,10))
     plot(p1,p2,p3, layout=@layout [a ; b c])
     println("tU/L=",round(sim_time(sim),digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
 end
-gif(anim, "result_$(eltype(sim.flow.u)).gif", fps = 15)
+gif(anim, "result_$(Λ)_$(eltype(sim.flow.u)).gif", fps = 15)
 # plot(reshape(sim.pois.n',(:,2)),ylim=(0,32))

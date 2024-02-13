@@ -48,7 +48,7 @@ struct MultiLevelPoisson{T,S<:AbstractArray{T},V<:AbstractArray{T}} <: AbstractP
     levels :: Vector{Poisson{T,S,V}}
     n :: Vector{Int16}
     perdir :: NTuple # direction of periodic boundary condition
-    function MultiLevelPoisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};maxlevels=6,perdir=(0,)) where T
+    function MultiLevelPoisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};maxlevels=4,perdir=(0,)) where T
         levels = Poisson[Poisson(x,L,z;perdir)]
         while divisible(levels[end]) && length(levels) <= maxlevels
             push!(levels,restrictML(levels[end]))
@@ -100,3 +100,18 @@ function solver!(ml::MultiLevelPoisson;tol=1e-6,itmx=32)
     BC!(p.x;perdir=p.perdir)
     push!(ml.n,nᵖ);
 end
+# function solver!(ml::MultiLevelPoisson;tol=2e-4,itmx=32)
+#     p = ml.levels[1]
+#     BC!(p.x;perdir=p.perdir)
+#     residual!(p); r₀ = r₂ = L∞(p); r₂₀ = L₂(p)
+#     nᵖ=0
+#     while r₂>tol && nᵖ<itmx
+#         Vcycle!(ml)
+#         smooth!(p); r₂ = L∞(p)
+#         nᵖ+=1
+#     end
+#     (nᵖ<2 && length(ml.levels)>5) && pop!(ml.levels); # remove coarsest level if this was easy
+#     (nᵖ>4 && divisible(ml.levels[end])) && push!(ml.levels,restrictML(ml.levels[end])) # add a level if this was hard
+#     BC!(p.x;perdir=p.perdir)
+#     push!(ml.n,nᵖ);
+# end

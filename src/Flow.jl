@@ -124,12 +124,15 @@ end
 function project!(a::Flow{n},b::AbstractPoisson,w=1) where n
     dt = w*a.Δt[end]
     @inside b.z[I] = div(I,a.u); b.x .*= dt # set source term & solution IC
-    solver!(b)
+    # zero initial condition
+    solver!(b);
+    b.x .-= mean(b.x) # remove mean
     for i ∈ 1:n  # apply solution and unscale to recover pressure
         @loop a.u[I,i] -= b.L[I,i]*∂(i,I,b.x) over I ∈ inside(b.x)
     end
     b.x ./= dt
 end
+mean(a::AbstractArray) = @inbounds(sum(a[inside(a)]))/length(a[inside(a)])
 
 """
     mom_step!(a::Flow,b::AbstractPoisson)

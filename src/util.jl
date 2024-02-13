@@ -115,26 +115,38 @@ rep(ex::Expr) = ex.head == :. ? Symbol(ex.args[2].value) : ex
 
 using StaticArrays
 """
-    loc(i,I) = loc(Ii)
+    loc(i,I)
 
 Location in space of the cell at CartesianIndex `I` at face `i`.
 Using `i=0` returns the cell center s.t. `loc = I`.
 """
-@inline loc(i,I::CartesianIndex{N},T=Float64) where N = SVector{N,T}(I.I .- 1.5 .- 0.5 .* δ(i,I).I)
-@inline loc(Ii::CartesianIndex,T=Float64) = loc(last(Ii),Base.front(Ii),T)
-Base.last(I::CartesianIndex) = last(I.I)
-Base.front(I::CartesianIndex) = CI(Base.front(I.I))
+@inline loc(i,I::CartesianIndex{N},T=Float64) where N = SVector{N,T}(I.I .- 0.5 .* δ(i,I).I)
+
 """
     apply!(f, c)
 
-Apply a vector function `f(i,x)` to the faces of a uniform staggered array `c` or
-a function `f(x)` to the center of a uniform array `c`.
+Apply a vector function `f(i,x)` to the faces of a uniform staggered array `c`.
 """
 apply!(f,c) = hasmethod(f,Tuple{Int,CartesianIndex}) ? applyV!(f,c) : applyS!(f,c)
-applyV!(f,c) = @loop c[Ii] = f(last(Ii),loc(Ii)) over Ii ∈ CartesianIndices(c)
-applyS!(f,c) = @loop c[I] = f(loc(0,I)) over I ∈ CartesianIndices(c)
+function applyV!(f,c)
+    N,n = size_u(c)
+    for i ∈ 1:n
+        @loop c[I,i] = f(i,loc(i,I)) over I ∈ CartesianIndices(N)
+    end
+end
+
+""" 
+    apply!(f, c)
+
+Apply a scalar function `f(x)` to the center of a uniform staggered array `c`.
 """
-    slice(dims,i,j,low=1)
+function applyS!(f,c)
+    @inside c[I] = f(loc(0,I))
+end
+
+
+"""
+    slice(dims,i,j,low=1,trim=0)
 
 Return `CartesianIndices` range slicing through an array of size `dims` in
 dimension `j` at index `i`. `low` optionally sets the lower extent of the range
@@ -145,57 +157,62 @@ function slice(dims::NTuple{N},i,j,low=1) where N
 end
 
 """
-    BC!(a,A)
+    BC!(a,A,f=1)
 
 Apply boundary conditions to the ghost cells of a _vector_ field. A Dirichlet
-condition `a[I,i]=A[i]` is applied to the vector component _normal_ to the domain
-boundary. For example `aₓ(x)=Aₓ ∀ x ∈ minmax(X)`. A zero Neumann condition
+condition `a[I,i]=f*A[i]` is applied to the vector component _normal_ to the domain
+boundary. For example `aₓ(x)=f*Aₓ ∀ x ∈ minmax(X)`. A zero Neumann condition
 is applied to the tangential components.
 """
-function BC!(a,A,saveexit=false,perdir=(0,))
+function BC!(a,A,f=1)
     N,n = size_u(a)
-    for i ∈ 1:n, j ∈ 1:n
-        if j in perdir
-            @loop a[I,i] = a[CIj(j,I,N[j]-1),i] over I ∈ slice(N,1,j)
-            @loop a[I,i] = a[CIj(j,I,2),i] over I ∈ slice(N,N[j],j)
-        else
-            if i==j # Normal direction, Dirichlet
-                for s ∈ (1,2)
-                    @loop a[I,i] = A[i] over I ∈ slice(N,s,j)
-                end
-                (!saveexit || i>1) && (@loop a[I,i] = A[i] over I ∈ slice(N,N[j],j)) # overwrite exit
-            else    # Tangential directions, Neumann
-                @loop a[I,i] = a[I+δ(j,I),i] over I ∈ slice(N,1,j)
-                @loop a[I,i] = a[I-δ(j,I),i] over I ∈ slice(N,N[j],j)
+    for j ∈ 1:n, i ∈ 1:n
+        if i==j # Normal direction, Dirichlet
+            for s ∈ (1,2,N[j])
+                @loop a[I,i] = f*A[i] over I ∈ slice(N,s,j)
             end
+        else    # Tangential directions, Neumann
+            @loop a[I,i] = a[I+δ(j,I),i] over I ∈ slice(N,1,j)
+            @loop a[I,i] = a[I-δ(j,I),i] over I ∈ slice(N,N[j],j)
         end
     end
 end
-"""
-    exitBC!(u,u⁰,U,Δt)
 
-Apply a 1D convection scheme to fill the ghost cell on the exit of the domain.
-"""
-function exitBC!(u,u⁰,U,Δt)
-    N,_ = size_u(u)
-    exitR = slice(N.-1,N[1],1,2)              # exit slice excluding ghosts
-    @loop u[I,1] = u⁰[I,1]-U[1]*Δt*(u⁰[I,1]-u⁰[I-δ(1,I),1]) over I ∈ exitR
-    ∮u = sum(u[exitR,1])/length(exitR)-U[1]   # mass flux imbalance
-    @loop u[I,1] -= ∮u over I ∈ exitR         # correct flux
-end
 """
     BC!(a)
 Apply zero Neumann boundary conditions to the ghost cells of a _scalar_ field.
 """
-function BC!(a;perdir=(0,))
+function BC!(a)
     N = size(a)
     for j ∈ eachindex(N)
-        if j in perdir
-            @loop a[I] = a[CIj(j,I,N[j]-1)] over I ∈ slice(N,1,j)
-            @loop a[I] = a[CIj(j,I,2)] over I ∈ slice(N,N[j],j)
-        else
-            @loop a[I] = a[I+δ(j,I)] over I ∈ slice(N,1,j)
-            @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
-        end
+        @loop a[I] = a[I+δ(j,I)] over I ∈ slice(N,1,j)
+        @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
     end
+end
+"""
+    interp(x::SVector, arr::AbstractArray)
+
+    Linear interpolation from array `arr` at index-coordinate `x`.
+    Note: This routine works for any number of dimensions.
+"""
+function interp(x::SVector{D,T}, arr::AbstractArray{T,D}) where {D,T}
+    # Index below the interpolation coordinate and the difference
+    i = floor.(Int,x); y = x.-i
+    
+    # CartesianIndices around x 
+    I = CartesianIndex(i...); R = I:I+oneunit(I)
+
+    # Linearly weighted sum over arr[R] (in serial)
+    s = zero(T)
+    @fastmath @inbounds @simd for J in R
+        weight = prod(@. ifelse(J.I==I.I,1-y,y))
+        s += arr[J]*weight
+    end
+    return s
+end
+
+function interp(x::SVector{D,T}, varr::AbstractArray{T}) where {D,T}
+    # Shift to align with each staggered grid component and interpolate
+    @inline shift(i) = SVector{D,T}(ifelse(i==j,0.5,0.) for j in 1:D)
+    return SVector{D,T}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
 end

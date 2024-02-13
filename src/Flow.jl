@@ -33,15 +33,20 @@ function median(a,b,c)
     return a
 end
 
-function conv_diff!(r,u,Φ;ν=0.1)
+function conv_diff!(r,u,Φ;ν=0.1,perdir=(0,))
     r .= 0.
     N,n = size_u(u)
     for i ∈ 1:n, j ∈ 1:n
-        @loop r[I,i] += ϕ(j,CI(I,i),u)*ϕ(i,CI(I,j),u)-ν*∂(j,CI(I,i),u) over I ∈ slice(N,2,j,2)
-        @loop (Φ[I] = ϕu(j,CI(I,i),u,ϕ(i,CI(I,j),u))-ν*∂(j,CI(I,i),u);
+        # if it is periodic direction
+        tagper = (j in perdir)
+        # treatment for bottom boundary with BCs
+        lowerBoundary!(r,u,Φ,ν,i,j,N,Val{tagper}())
+        # inner cells
+        @loop (Φ[I] = ϕu(j,CI(I,i),u,ϕ(i,CI(I,j),u)) - ν*∂(j,CI(I,i),u);
                r[I,i] += Φ[I]) over I ∈ inside_u(N,j)
         @loop r[I-δ(j,I),i] -= Φ[I] over I ∈ inside_u(N,j)
-        @loop r[I-δ(j,I),i] += - ϕ(j,CI(I,i),u)*ϕ(i,CI(I,j),u) + ν*∂(j,CI(I,i),u) over I ∈ slice(N,N[j],j,2)
+        # treatment for upper boundary with BCs
+        upperBoundary!(r,u,Φ,ν,i,j,N,Val{tagper}())
     end
 end
 
@@ -136,12 +141,12 @@ and the `AbstractPoisson` pressure solver to project the velocity onto an incomp
 @fastmath function mom_step!(a::Flow,b::AbstractPoisson)
     a.u⁰ .= a.u; a.u .= 0
     # predictor u → u'
-    conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν)
+    conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν,perdir=a.perdir)
     accelerate!(a.f,time(a),a.g)
     BDIM!(a); BC!(a.u,a.U)
     project!(a,b); BC!(a.u,a.U)
     # corrector u → u¹
-    conv_diff!(a.f,a.u,a.σ,ν=a.ν)
+    conv_diff!(a.f,a.u,a.σ,ν=a.ν,perdir=a.perdir)
     accelerate!(a.f,timeNext(a),a.g)
     BDIM!(a); BC!(a.u,a.U,2)
     project!(a,b,2); a.u ./= 2; BC!(a.u,a.U)

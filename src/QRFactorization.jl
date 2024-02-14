@@ -33,14 +33,22 @@ end
 
 """
     QR factorization
+
+Strcuture to hold the facorisation of the coupling matrices.
 """
+# @TODO make it immutable 
 mutable struct QRFactorization{T}
     Q::Matrix{T}
     R::Matrix{T}
     cols::Int # how many are use actually
     rows::Int
 end
+"""
+    QRFactorization(V::AbstractAMtrix{T},singularityLimit::T)
 
+Compute and return the QR factorisation of the matrix `V` with a singularity limit `singularityLimit`.
+The singularity limit sets the threshold for the ratio of the orthogonalized vector to the original vector.
+"""
 function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
     QR = QRFactorization(zero(V), zero(V), 0, 0);
     delIndices=[];
@@ -52,8 +60,13 @@ function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
     end
     return QR.Q, QR.R, delIndices
 end
-
-function apply_QR!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2) where T
+"""
+    apply_QR!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2)
+    
+Compute the QR facorisation of `V` for a given singularity limit and delete the column of
+`V` and `W` that do not pass the threshold criterion.
+"""
+function apply_QR!(QR::QRFactorization{T}, V, W, _col; singularityLimit::T=1e-2) where T
     delIndices=[]; QR.cols = 0; QR.rows = 0;
     _col = min(_col,size(V,2))
     for i in 1:_col
@@ -69,7 +82,12 @@ function apply_QR!(QR::QRFactorization, V, W, _col; singularityLimit::T=1e-2) wh
     end
     return nothing
 end
+"""
+    insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singularityLimit::T) where T
 
+Insert column `k` of `V` in the QR factorisation with a singularity limit `singularityLimit`.
+If the new column is not orthogonal to the previous ones, it is discarded.
+"""
 function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singularityLimit::T) where T
     # copy to avoid overwriting
     v = copy(vec)

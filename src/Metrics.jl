@@ -100,4 +100,4 @@ end
 @inline function nds(body::AbstractBody,x,t)
     d,n,_ = measure(body,x,t)
     n*WaterLily.kern(clamp(d,-1,1))
-end 
+end

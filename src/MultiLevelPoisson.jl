@@ -34,6 +34,7 @@ restrict!(a,b) = @inside a[I] = restrict(I,b)
 prolongate!(a,b) = @inside a[I] = b[down(I)]
 
 @inline divisible(N) = mod(N,2)==0 && N>4
+@inline divisible(l::Poisson) = all(size(l.x) .|> divisible)
 """
     MultiLevelPoisson{N,M}
 
@@ -49,7 +50,7 @@ struct MultiLevelPoisson{T,S<:AbstractArray{T},V<:AbstractArray{T}} <: AbstractP
     perdir :: NTuple # direction of periodic boundary condition
     function MultiLevelPoisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};maxlevels=4,perdir=(0,)) where T
         levels = Poisson[Poisson(x,L,z;perdir)]
-        while all(size(levels[end].x) .|> divisible) && length(levels) <= maxlevels
+        while divisible(levels[end]) && length(levels) <= maxlevels
             push!(levels,restrictML(levels[end]))
         end
         text = "MultiLevelPoisson requires size=a2ⁿ, where n>2"

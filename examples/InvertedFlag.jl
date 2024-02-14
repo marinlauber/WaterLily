@@ -103,7 +103,7 @@ iterations = []
             converged = update!(sim.cpl, sim.pnts, sim.forces, 0.0)
 
             # check for convengence
-            (converged || iter+1 > 50) && break
+            (converged || iter+1 > 15) && break
 
             # if we have not converged, we must revert
             revert!(sim); iter += 1

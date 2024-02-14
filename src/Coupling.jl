@@ -1,22 +1,7 @@
 using LinearAlgebra: norm,dot
 include("QRFactorization.jl")
 
-# function writetxt(string, v::Vector{Float64})
-#     open(string*".txt","w") do io
-#         for i in 1:length(v)
-#             println(io, v[i])
-#         end
-#     end
-# end
-# function writetxt(string, a::Matrix{Float64})
-#     open(string*".txt","w") do io
-#         for i in 1:size(a,1)
-#             println(io, a[i,:])
-#         end
-#     end
-# end
-
-# these are not really needed
+# utility function
 function concatenate!(vec, a, b, subs)
     vec[subs[1]] = a[1,:]; vec[subs[2]] = a[2,:];
     vec[subs[3]] = b[1,:]; vec[subs[4]] = b[2,:];
@@ -26,8 +11,25 @@ function revert!(vec, a, b, subs)
     b[1,:] = vec[subs[3]]; b[2,:] = vec[subs[4]];
 end
 
-abstract type AbstractCoupling end
 
+abstract type AbstractCoupling end
+"""
+    update!(cp::AbstractCoupling,primary,secondary,kwargs)
+
+Updates the coupling variable `cp` using the implemented couping scheme.
+"""
+function update!(cp::AbstractCoupling,primary,secondary,kwargs)
+    xᵏ=zero(cp.x); concatenate!(xᵏ,primary,secondary,cp.subs)
+    converged = update!(cp,xᵏ,kwargs)
+    revert!(xᵏ,primary,secondary,cp.subs)
+    return converged
+end
+
+"""
+    CoupledSimulation()
+
+A struct to hold the coupled simulation of a fluid-structure interaction problem.
+"""
 struct CoupledSimulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
@@ -49,23 +51,25 @@ struct CoupledSimulation <: AbstractSimulation
     xˢ :: AbstractArray
     ẋˢ :: AbstractArray
     function CoupledSimulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number, body, struc, Coupling;
-                               Δt=0.25, ν=0., U=√sum(abs2,u_BC), ϵ=1, ωᵣ=0.5, maxCol=100,
-                               uλ::Function=(i,x)->u_BC[i],T=Float32,mem=Array) where N
-        flow = Flow(dims,u_BC;uλ,Δt,ν,T,f=mem); measure!(flow,body;ϵ)
-        force_0 = zeros((2,length(uv_integration(struc))))
-        pnts_0 = zero(body.surf.pnts)
-        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ),struc,
-            Coupling(pnts_0,force_0;relax=ωᵣ,maxCol),
-            force_0,pnts_0,
-            zeros(size(flow.u)),zeros(size(flow.p)),
-            zeros(size(struc.u[1])),
-            zeros(size(struc.u[2])),
-            zeros(size(struc.u[3])),
-            zeros(size(body.surf.pnts)),
-            zeros(size(body.velocity.pnts)))
+                               Δt=0.25, ν=0., g=nothing, U=√sum(abs2,u_BC), ϵ=1, ωᵣ=0.5, maxCol=100,
+                               perdir=(0,), uλ::Function=(i,x)->u_BC[i], exitBC=false, T=Float32, mem=Array) where N
+        flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC); measure!(flow,body;ϵ)
+        force = zeros((2,length(uv_integration(struc))))
+        Ns = size(struc.u[1]); Nn = size(body.surf.pnts)
+        uˢ, pˢ = zero(flow.u) |> mem, zero(flow.p) |> mem
+        dˢ, vˢ, aˢ = zeros(Ns) |> mem, zeros(Ns) |> mem, zeros(Ns) |> mem
+        pnts,xˢ,ẋˢ = zeros(Nn) |> mem, zeros(Nn) |> mem, zeros(Nn) |> mem
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ;perdir),struc,
+            Coupling(pnts,force;relax=ωᵣ,maxCol),force,pnts,uˢ,pˢ,dˢ,vˢ,aˢ,xˢ,ẋˢ)
     end
 end
-function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
+
+"""
+    sim_time(sim::CoupledSimulation,t_end)
+
+    
+"""
+function sim_step!(sim::CoupledSimulation,t_end;verbose=true,maxStep=15)
     t = sum(sim.flow.Δt[1:end-1])
     # @show t
     while t < t_end*sim.L/sim.U
@@ -84,7 +88,7 @@ function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
             verbose && print("    iteration: ",iter)
             converged = update!(sim.cpl,sim.pnts,sim.forces,0.0)
             # revert!(xᵏ,sim.pnts,sim.forces,sim.cpl.subs)
-            (converged || iter+1 > 50) && break
+            (converged || iter+1 > maxStep) && break
             # revert if not convergend
             revert!(sim); iter+=1
         end
@@ -94,6 +98,12 @@ function sim_step!(sim::CoupledSimulation,t_end;verbose=true,remeasure=true)
                            ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
+
+"""
+    store!(sim::CoupledSimulation)
+
+Checkpoints that state of a coupled simulation for implicit coupling.
+"""
 function store!(sim::CoupledSimulation)
     sim.uˢ .= sim.flow.u
     sim.pˢ .= sim.flow.p
@@ -103,6 +113,12 @@ function store!(sim::CoupledSimulation)
     sim.xˢ .= sim.body.surf.pnts
     sim.ẋˢ .= sim.body.velocity.pnts
 end
+
+"""
+    revert!(sim::CoupledSimulation)
+
+Reverts to the previous state of a coupled simulation for implicit coupling.
+"""
 function revert!(sim::CoupledSimulation)
     sim.flow.u .= sim.uˢ
     sim.flow.p .= sim.pˢ
@@ -116,33 +132,26 @@ function revert!(sim::CoupledSimulation)
     sim.body.velocity.pnts .= sim.ẋˢ
 end
 
-function update!(cp::AbstractCoupling,primary,secondary,kwargs)
-    xᵏ=zero(cp.x); concatenate!(xᵏ,primary,secondary,cp.subs)
-    converged = update!(cp,xᵏ,kwargs)
-    revert!(xᵏ,primary,secondary,cp.subs)
-    return converged
-end
 
-struct Relaxation <: AbstractCoupling
-    ω :: Float64                  # relaxation parameter
-    x :: AbstractArray{Float64}   # primary variable
-    r :: AbstractArray{Float64}   # primary variable
-    subs
-    function Relaxation(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5,maxCol=100)
+"""
+    Relaxation
+
+Standard Relaxation coupling scheme for implicit fluid-structure interaction simultations.
+
+"""
+struct Relaxation{T,Vf<:AbstractArray{T}} <: AbstractCoupling
+    ω :: T    # relaxation parameter
+    x :: Vf   # vector of coupling variable
+    r :: Vf   # vector of rediuals
+    subs :: Tuple # indices
+    function Relaxation(primary::AbstractArray{T},secondary::AbstractArray{T};
+                        relax::T=0.5,maxCol::Integer=100,mem=Array) where T
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
-        x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
-        new(relax,copy(x⁰),zero(x⁰),subs)
+        x⁰,r = zeros(N) |> mem, zeros(N) |> mem
+        concatenate!(x⁰,primary,secondary,subs)
+        new{T,typeof(x⁰)}(relax,x⁰,r,subs)
     end
-end
-function update(cp::Relaxation, xᵏ, reset) 
-    # store variable and residual
-    rᵏ = xᵏ .- cp.x
-    # relaxation updates
-    xᵏ .= cp.x .+ cp.ω*rᵏ
-    # xᵏ .= cp.x .- ((xᵏ.-cp.x)'*(rᵏ.-cp.r)/((rᵏ.-cp.r)'*(rᵏ.-cp.r)).-1.0)*rᵏ
-    cp.x .= xᵏ; cp.r .= rᵏ
-    return xᵏ
 end
 function update!(cp::Relaxation, xᵏ, kwarg)
     # check convergence
@@ -154,82 +163,32 @@ function update!(cp::Relaxation, xᵏ, kwarg)
     xᵏ .= cp.x .+ cp.ω*cp.r; cp.x .= xᵏ
     return false
 end
-function finalize!(cp::Relaxation, xᵏ)
-    # do nothing
-end
+finalize!(cp::Relaxation, xᵏ) = nothing
 
-
-struct IQNCoupling <: AbstractCoupling
-    ω :: Float64                    # intial relaxation
-    x :: AbstractArray{Float64}     # primary variable
-    x̃ :: AbstractArray{Float64}     # old solver iter (not relaxed)
-    r :: AbstractArray{Float64}     # primary residual
-    V :: AbstractArray{Float64}     # primary residual difference
-    W :: AbstractArray{Float64}     # primary variable difference
-    c :: AbstractArray{Float64}     # least-square coefficients
-    P :: ResidualSum                # preconditionner
-    QR :: QRFactorization{Float64}  # QR factorization
-    subs                            # sub residual indices
-    svec
-    iter :: Dict{Symbol,Int64}      # iteration counter
-    function IQNCoupling(primary::AbstractArray{Float64},secondary::AbstractArray;relax::Float64=0.5,maxCol::Integer=200)
-        n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂
+struct IQNCoupling{T,Vf<:AbstractArray{T},Mf<:AbstractArray{T}} <: AbstractCoupling
+    ω :: T                 # intial relaxation
+    x :: Vf                # primary variable
+    x̃ :: Vf                # old solver iter (not relaxed)
+    r :: Vf                # primary residual
+    V :: Mf                # primary residual difference
+    W :: Mf                # primary variable difference
+    c :: AbstractArray{T}  # least-square coefficients
+    P :: ResidualSum       # preconditionner
+    QR :: QRFactorization  # QR factorization
+    subs :: Tuple          # sub residual indices
+    svec :: Tuple
+    iter :: Dict{Symbol,Int32}      # iteration counter
+    function IQNCoupling(primary::AbstractArray{T},secondary::AbstractArray{T};
+                         relax::T=0.5,maxCol::Integer=200,mem=Array) where T
+        n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂; M = min(N÷2,maxCol)
+        x⁰,x,r = zeros(N) |> mem, zeros(N) |> Array, zeros(N) |> Array
+        V, W, c = zeros((N,M)) |> mem, zeros((N,M)) |> mem, zeros(M) |> mem
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
-        x⁰ = zeros(N); concatenate!(x⁰,primary,secondary,subs)
-        svec = (1:n₁*m₁,n₁*m₁+1:N)
-        new(relax,x⁰,zeros(N),zeros(N),zeros(N,min(N÷2,maxCol)),zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol)),
-            ResidualSum(N),
-            QRFactorization(zeros(N,min(N÷2,maxCol)),zeros(min(N÷2,maxCol),min(N÷2,maxCol)),0,0),
-            subs,svec,Dict(:k=>0,:first=>1))
+        concatenate!(x⁰,primary,secondary,subs); svec = (1:n₁*m₁,n₁*m₁+1:N)
+        new{T,typeof(x⁰),typeof(V)}(relax,x⁰,x,r,V,W,c,ResidualSum(N),
+                                    QRFactorization(copy(V),zeros(M,M),0,0),
+                                    subs,svec,Dict(:k=>0,:first=>1))
     end
-end
-function update(cp::IQNCoupling, xᵏ, _firstIter)
-    Δx = zeros(size(cp.x))
-    if cp.iter[:k]==0
-        # compute residual and store variable
-        cp.r .= xᵏ .- cp.x; cp.x̃.=xᵏ
-        # relaxation update
-        Δx .= cp.ω*cp.r;
-        xᵏ .= cp.x .+ cp.ω*cp.r
-        # store values
-        cp.x .= xᵏ
-    else
-        # residuals
-        rᵏ = xᵏ .- cp.x;
-        k = min(cp.iter[:k],cp.QR.cols) # defualt we do not insert a column
-        if !_firstIter # on a first iteration, we simply apply the relaxation
-            @debug "updating V and W matrix"
-            # roll the matrix to make space for new column
-            roll!(cp.V); roll!(cp.W)
-            cp.V[:,1] = rᵏ .- cp.r;
-            cp.W[:,1] = xᵏ .- cp.x̃;
-            k = min(cp.iter[:k],cp.QR.cols+1)
-        end
-        cp.r .= rᵏ; cp.x̃ .= xᵏ # save old solver iter
-        # residual sum preconditioner
-        update_P!(cp.P,rᵏ,cp.svec,Val(false))
-        cp.V .*= cp.P.w
-        # recompute QR decomposition and filter columns
-        ε = _firstIter ? Float64(0.0) : 1e-2
-        @debug "updating QR factorization with ε=$ε and k=$k"
-        apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
-        cp.V .*= cp.P.iw # revert scaling
-        # solve least-square problem 
-        R = @view cp.QR.R[1:cp.QR.cols,1:cp.QR.cols]
-        Q = @view cp.QR.Q[:,1:cp.QR.cols]
-        rᵏ .*= cp.P.w # apply preconditioer to the residuals
-        cᵏ = backsub(R,-Q'*rᵏ)
-        @debug "least-square coefficients: $cᵏ"
-        cp.c[1:length(cᵏ)] .= cᵏ
-        # rᵏ .*= cp.P.iw # revert preconditioer to the residuals
-        Δx .= (@view cp.W[:,1:length(cᵏ)])*cᵏ
-        # update for next step
-        @debug "correction factor $Δx"
-        @debug "residuals         $(cp.r)"
-        xᵏ.= cp.x .+ Δx .+ cp.r; cp.x .= xᵏ
-    end
-    cp.iter[:k] += 1
-    return xᵏ
 end
 function update_VW!(cp,x,r)
     roll!(cp.V); roll!(cp.W)
@@ -237,7 +196,7 @@ function update_VW!(cp,x,r)
     cp.W[:,1] = x .- cp.x̃;
     min(cp.iter[:k],cp.QR.cols+1)
 end
-function update!(cp::IQNCoupling, xᵏ, kwarg)
+function update!(cp::IQNCoupling{T}, xᵏ, kwarg) where T
     # compute the residuals
     rᵏ = xᵏ .- cp.x;
     println(" r₂: ",res(cp.x, xᵏ), " converged: : ",res(cp.x, xᵏ)<1e-2)
@@ -272,7 +231,7 @@ function update!(cp::IQNCoupling, xᵏ, kwarg)
         # apply precondiotnner
         cp.V .*= cp.P.w;
         # recompute QR decomposition and filter columns
-        ε = Bool(cp.iter[:first]) ? Float64(0.0) : 1e-2
+        ε = Bool(cp.iter[:first]) ? T(0.0) : 1e-2
         @debug "updating QR factorization with ε=$ε and k=$k"
         apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
         cp.V .*= cp.P.iw # revert scaling
@@ -310,4 +269,4 @@ roll!(A::AbstractArray) = (A[:,2:end] .= A[:,1:end-1])
 """
     relative residual norm, bounded
 """
-res(xᵏ,xᵏ⁺¹) = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹.+eps())
+res(xᵏ::AbstractArray{T},xᵏ⁺¹::AbstractArray{T}) where T = norm(xᵏ⁺¹-xᵏ)/norm(xᵏ⁺¹.+eps(T))

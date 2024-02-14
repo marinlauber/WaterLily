@@ -42,6 +42,7 @@ Constructor for a WaterLily.jl simulation:
   - `L`: Simulation length scale.
   - `U`: Simulation velocity scale.
   - `Δt`: Initial time step.
+  - `ν`: Scaled viscosity (`Re=UL/ν`).
   - `g`: Domain acceleration, `g(i,t)=duᵢ/dt`
   - `ϵ`: BDIM kernel width.
   - `uλ`: Function to generate the initial velocity field.

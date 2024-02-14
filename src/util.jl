@@ -134,7 +134,7 @@ apply!(f,c) = hasmethod(f,Tuple{Int,CartesianIndex}) ? applyV!(f,c) : applyS!(f,
 applyV!(f,c) = @loop c[Ii] = f(last(Ii),loc(Ii)) over Ii ∈ CartesianIndices(c)
 applyS!(f,c) = @loop c[I] = f(loc(0,I)) over I ∈ CartesianIndices(c)
 """
-    slice(dims,i,j,low=1,trim=0)
+    slice(dims,i,j,low=1)
 
 Return `CartesianIndices` range slicing through an array of size `dims` in
 dimension `j` at index `i`. `low` optionally sets the lower extent of the range

@@ -97,18 +97,18 @@ struct Flow{D, T, Sf<:AbstractArray{T}, Vf<:AbstractArray{T}, Tf<:AbstractArray{
     U :: NTuple{D, T} # domain boundary values
     Δt:: Vector{T} # time step (stored in CPU memory)
     ν :: T # kinematic viscosity
-    g :: Union{Function,Nothing} # (possibly time-varuing) uniform acceleration field
-    exitBC :: Bool # Convective exit
+    g :: Union{Function,Nothing} # (possibly time-varying) uniform acceleration field
+    exitBC :: Bool # Convection exit
     perdir :: NTuple # direction of periodic boundary condition
     function Flow(N::NTuple{D}, U::NTuple{D}; f=Array, Δt=0.25, ν=0., g=nothing,
                   uλ::Function=(i, x) -> 0., perdir=(0,), exitBC=false, T=Float64) where D
         Ng = N .+ 2
         Nd = (Ng..., D)
-        u = Array{T}(undef, Nd...) |> f; apply!(uλ, u); BC!(u, U)
+        u = Array{T}(undef, Nd...) |> f; apply!(uλ, u);
+        BC!(u,U,exitBC,perdir); exitBC!(u,u,U,0.)
         u⁰ = copy(u)
         fv, p, σ = zeros(T, Nd) |> f, zeros(T, Ng) |> f, zeros(T, Ng) |> f
         V, μ₀, μ₁ = zeros(T, Nd) |> f, ones(T, Nd) |> f, zeros(T, Ng..., D, D) |> f
-        BC!(μ₀,ntuple(zero, D))
         σᵥ = zeros(T, Ng) |> f
         new{D,T,typeof(p),typeof(u),typeof(μ₁)}(u,u⁰,fv,p,σ,V,σᵥ,μ₀,μ₁,U,T[Δt],ν,g,exitBC,perdir)
     end
@@ -143,11 +143,13 @@ and the `AbstractPoisson` pressure solver to project the velocity onto an incomp
     a.u⁰ .= a.u; scale_u!(a,0)
     # predictor u → u'
     conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν,perdir=a.perdir)
+    accelerate!(a.f,time(a),a.g)
     BDIM!(a); BC!(a.u,a.U,a.exitBC,a.perdir)
     a.exitBC && exitBC!(a.u,a.u⁰,a.U,a.Δt[end]) # convective exit
     project!(a,b); BC!(a.u,a.U,a.exitBC,a.perdir)
     # corrector u → u¹
     conv_diff!(a.f,a.u,a.σ,ν=a.ν,perdir=a.perdir)
+    accelerate!(a.f,timeNext(a),a.g)
     BDIM!(a); scale_u!(a,0.5); BC!(a.u,a.U,a.exitBC,a.perdir)
     project!(a,b,0.5); BC!(a.u,a.U,a.exitBC,a.perdir)
     push!(a.Δt,CFL(a))

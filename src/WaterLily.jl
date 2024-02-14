@@ -98,7 +98,7 @@ function sim_step!(sim::Simulation;remeasure=true)
 end
 
 """
-    measure!(sim::Simulation,t=time(sim))
+    measure!(sim::AbstractSimulation,t=time(sim))
 
 Measure a dynamic `body` to update the `flow` and `pois` coefficients.
 """

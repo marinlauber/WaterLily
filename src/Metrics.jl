@@ -1,10 +1,10 @@
 using StaticArrays
 
 # utilities
-@inline fSV(f,n) = SA[ntuple(f,n)...]
-@inline @fastmath fsum(f,n) = sum(ntuple(f,n))
+Base.@propagate_inbounds @inline fSV(f,n) = SA[ntuple(f,n)...]
+Base.@propagate_inbounds @inline @fastmath fsum(f,n) = sum(ntuple(f,n))
 norm2(x) = √(x'*x)
-@fastmath function permute(f,i)
+Base.@propagate_inbounds @fastmath function permute(f,i)
     j,k = i%3+1,(i+1)%3+1
     f(j,k)-f(k,j)
 end
@@ -57,15 +57,6 @@ function Qcriterion(I::CartesianIndex{3},u)
 end
 
 """
-    FMPM
-
-Force and moment partition computation
-"""
-function fmpm()
-    # nothing yet
-end
-
-"""
     curl(i,I,u)
 
 Compute component `i` of ``𝛁×𝐮`` at the __edge__ of cell `I`.
@@ -102,15 +93,11 @@ end
 
 Surface normal integral of field `p` over the `body`.
 """
-function ∮nds(p::AbstractArray{T,N},df::AbstractArray{T},body::AutoBody,t=0) where {T,N}
-    nds!(df,body,t)
-    for i in 1:N
-        @loop df[I,i] = df[I,i]*p[I] over I ∈ inside(p)
-    end
-    reshape(sum(df,dims=1:N),N) |> Array
+function ∮nds(p::AbstractArray{T,N},df::AbstractArray{T},body::AbstractBody,t=0) where {T,N}
+    @loop df[I,:] .= p[I]*nds(body,loc(0,I,T),t) over I ∈ inside(p)
+    [sum(@inbounds(df[inside(p),i])) for i ∈ 1:N] |> Array
 end
-nds!(a,body,t=0) = apply!(a) do i,x
-    d = body.sdf(x,t)
-    n = ForwardDiff.gradient(y -> body.sdf(y,t), x)
-    n[i]*WaterLily.kern(clamp(d,-1,1)) # the kernel is not shifted outside
-end
+@inline function nds(body::AbstractBody,x,t)
+    d,n,_ = measure(body,x,t)
+    n*WaterLily.kern(clamp(d,-1,1))
+end 

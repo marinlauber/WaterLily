@@ -79,6 +79,26 @@ function mult!(p::Poisson,x)
     return p.z
 end
 
+"""
+    residual!(p::Poisson)
+
+Computes the resiual `r = z-Ax` and corrects it such that
+`r = 0` if `iD==0` which ensures local satisfiability
+    and 
+`sum(r) = 0` which ensures global satisfiability.
+
+The global correction is done by adjusting all points uniformly, 
+minimizing the local effect. Other approaches are possible.
+
+Note: These corrections mean `x` is not strictly solving `Ax=z`, but
+without the corrections, no solution exists.
+"""
+# function residual!(p::Poisson) 
+#     @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-mult(I,p.L,p.D,p.x))
+#     s = sum(p.r)/length(p.r[inside(p.r)])
+#     abs(s) <= 2eps(eltype(s)) && return
+#     @inside p.r[I] = p.r[I]-s
+# end
 residual!(p::Poisson) = @inside p.r[I] = p.z[I]-mult(I,p.L,p.D,p.x)
 
 increment!(p::Poisson) = @loop (p.r[I] = p.r[I]-mult(I,p.L,p.D,p.ϵ);

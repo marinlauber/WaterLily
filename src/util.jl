@@ -115,36 +115,24 @@ rep(ex::Expr) = ex.head == :. ? Symbol(ex.args[2].value) : ex
 
 using StaticArrays
 """
-    loc(i,I)
+    loc(i,I) = loc(Ii)
 
 Location in space of the cell at CartesianIndex `I` at face `i`.
 Using `i=0` returns the cell center s.t. `loc = I`.
 """
 @inline loc(i,I::CartesianIndex{N},T=Float64) where N = SVector{N,T}(I.I .- 0.5 .* δ(i,I).I)
-
+@inline loc(Ii::CartesianIndex,T=Float64) = loc(last(Ii),Base.front(Ii),T)
+Base.last(I::CartesianIndex) = last(I.I)
+Base.front(I::CartesianIndex) = CI(Base.front(I.I))
 """
     apply!(f, c)
 
-Apply a vector function `f(i,x)` to the faces of a uniform staggered array `c`.
+Apply a vector function `f(i,x)` to the faces of a uniform staggered array `c` or
+a function `f(x)` to the center of a uniform array `c`.
 """
 apply!(f,c) = hasmethod(f,Tuple{Int,CartesianIndex}) ? applyV!(f,c) : applyS!(f,c)
-function applyV!(f,c)
-    N,n = size_u(c)
-    for i ∈ 1:n
-        @loop c[I,i] = f(i,loc(i,I)) over I ∈ CartesianIndices(N)
-    end
-end
-
-""" 
-    apply!(f, c)
-
-Apply a scalar function `f(x)` to the center of a uniform staggered array `c`.
-"""
-function applyS!(f,c)
-    @inside c[I] = f(loc(0,I))
-end
-
-
+applyV!(f,c) = @loop c[Ii] = f(last(Ii),loc(Ii)) over Ii ∈ CartesianIndices(c)
+applyS!(f,c) = @loop c[I] = f(loc(0,I)) over I ∈ CartesianIndices(c)
 """
     slice(dims,i,j,low=1,trim=0)
 

@@ -12,18 +12,19 @@
   <data:vector name="Data-One" />
   <data:vector name="Data-Two" />
 
-  <mesh name="SolverOne-Mesh"  dimensions="3">
+  <mesh name="SolverOne-Mesh"  dimensions="2">
     <use-data name="Data-One" />
     <use-data name="Data-Two" />
   </mesh>
 
-  <mesh name="SolverTwo-Mesh"  dimensions="3">
+  <mesh name="SolverTwo-Mesh"  dimensions="2">
     <use-data name="Data-One" />
     <use-data name="Data-Two" />
   </mesh>
 
   <participant name="SolverOne">
     <provide-mesh name="SolverOne-Mesh" />
+    <receive-mesh name="SolverTwo-Mesh" from="SolverTwo" />
     <write-data name="Data-One" mesh="SolverOne-Mesh" />
     <read-data name="Data-Two" mesh="SolverOne-Mesh" />
   </participant>

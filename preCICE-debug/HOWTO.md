@@ -48,3 +48,7 @@ sudo cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/apps/gismo/stable 
 sudo make -j 4
 sudo make install
 ```
+
+```bash
+sudo cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/apps/gismo/stable -DCMAKE_PREFIX_PATH=/apps/precice/3.0.0/lib/cmake/precice ../gismo/
+```

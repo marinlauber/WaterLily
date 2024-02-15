@@ -50,9 +50,14 @@ struct CoupledSimulation <: AbstractSimulation
     aˢ :: AbstractArray
     xˢ :: AbstractArray
     ẋˢ :: AbstractArray
-    function CoupledSimulation(dims::NTuple{N}, u_BC::NTuple{N}, L::Number, body, struc, Coupling;
-                               Δt=0.25, ν=0., g=nothing, U=√sum(abs2,u_BC), ϵ=1, ωᵣ=0.5, maxCol=100,
-                               perdir=(0,), uλ::Function=(i,x)->u_BC[i], exitBC=false, T=Float32, mem=Array) where N
+    function CoupledSimulation(dims::NTuple{N}, u_BC, L::Number, body, struc, Coupling;
+                               Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, ωᵣ=0.5, maxCol=100,
+                               perdir=(0,), uλ=nothing, exitBC=false, T=Float32, mem=Array) where N
+        @assert !(isa(u_BC,Function) && isa(uλ,Function)) "`u_BC` and `uλ` cannot be both specified as Function"
+        @assert !(isnothing(U) && isa(u_BC,Function)) "`U` must be specified if `u_BC` is a Function"
+        isa(u_BC,Function) && @assert all(typeof.(ntuple(i->u_BC(i,T(0)),N)).==T) "`u_BC` is not type stable"
+        uλ = isnothing(uλ) ? ifelse(isa(u_BC,Function),(i,x)->u_BC(i,0.),(i,x)->u_BC[i]) : uλ
+        U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
         flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC); measure!(flow,body;ϵ)
         force = zeros((2,length(uv_integration(struc))))
         Ns = size(struc.u[1]); Nn = size(body.surf.pnts)

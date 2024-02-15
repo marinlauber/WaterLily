@@ -8,6 +8,9 @@ using LinearAlgebra
 include("TwoD_plots.jl")
 include("../src/Coupling.jl")
 
+let 
+    
+
 function force(b::DynamicBody,flow::Flow)
     reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])
 end
@@ -38,7 +41,7 @@ struc = DynamicFEOperator(mesh, gauss_rule, EI, EA,
                           Dirichlet_BC, Neumann_BC, ρ=density; ρ∞=0.0)
 
 ## Simulation parameters
-L=2^4
+L=2^5
 Re=200
 U=1
 ϵ=0.5
@@ -57,11 +60,18 @@ body = DynamicBody(nurbs, (0,1); dist=dis);
 # force function
 integration_points = uv_integration(struc)
 
+mₐ = 1.0
+m = 1.0; Fn=0.05
+vel = SA[0.,0.]
+a0 = SA[0.,0.]
+pos = SA[0.,0.]
+g = SA[0.,-U^2/(Fn^2*L)]
+t_init = 0
+
 # make a coupled sim
-a0 = 0.5
-# Ut(i,t::T) where T = i==1 ? convert(T,a0*t+(1.0+tanh(31.4*(t-1.0/a0)))/2.0*(1-a0*t)) : zero(T)
-vel = SA[0.0,0.0]
-Ut(i,t::T) where T = convert(T,-vel[i])
+a₀ = 0.5
+Ut(i,t::T) where T = i==1 ? convert(T,a₀*t+(1.0+tanh(31.4*(t-1.0/a₀)))/2.0*(1-a₀*t)) : zero(T)
+# Ut(i,t::T) where T = convert(T,-vel[i])
 sim = CoupledSimulation((8L,6L),Ut,L,body,struc,IQNCoupling;
                          U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=6,T=Float64)
 
@@ -71,8 +81,6 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
     
-    # sim_step!(sim,tᵢ)
-
     # update until time tᵢ in the background
     t = sum(sim.flow.Δt[1:end-1])
     
@@ -96,6 +104,16 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
             # get new coupling variable
             sim.pnts .= points(sim.struc)
             sim.forces .= force(sim.body,sim.flow)
+
+            # compute motion and acceleration of domain
+            # @TODO make function different than above
+            fₚ = ParametricBodies.force(sim.body.surf,sim.flow.p)
+            Δt = sim.flow.Δt[end]
+            accel = (fₚ + m.*g + mₐ.*a0)/(m + mₐ)
+            pos = pos + Δt.*(vel+Δt.*accel./2.) 
+            vel = vel + Δt.*accel;
+            @show fₚ, vel
+            a0 = copy(accel)
 
             if t/sim.L*sim.U<0.50
                 sim.forces[2,:] .-= 0.5 # add vertical force
@@ -122,3 +140,5 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
     plot!(sim.body.surf)
     plot!(title="tU/L $tᵢ")
 end
+
+end # let

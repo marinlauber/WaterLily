@@ -63,17 +63,18 @@ let # setting local scope for dt outside of the while loop
 
     # get the mesh verticies from the structural solver
     (vertexIDs_nurbs, vertices_nurbs) = getMeshVertexIDsAndCoordinates("Nurbs-Mesh-Solid")
-    vertices_nurbs = Array{Float64,2}(vertices_nurbs')
     vertexIDs_nurbs = Array{Int32}(vertexIDs_nurbs)
     (vertexIDs_forces, tmp) = getMeshVertexIDsAndCoordinates("Force-Mesh-Solid")
-    # only x-coordinate make sense
-    integration_points = tmp[:,1]
+    integration_points = tmp[:,1] # only x-coordinate make sense
     vertexIDs_forces = Array{Int32}(vertexIDs_forces)
+    (_, knots) = getMeshVertexIDsAndCoordinates("Knots-Mesh")
+    knots = knots[:,1] # the other coordinates are dummies
+    @show knots
     
     # construct from mesh, this can be tidy
-    D, N = size(vertices_nurbs)
-    u⁰ = MMatrix{D,N}(vertices_nurbs.*L.+[2L,2L])
-    nurbs = BSplineCurve(copy(u⁰);degree=3)
+    N,D = size(vertices_nurbs)
+    u⁰ = MMatrix{D,N}(vertices_nurbs'.*L.+[2L,2L])
+    nurbs = NurbsCurve(copy(u⁰),knots,ones(N))
     
     # overload the distance function and make function
     dis(p,n) = √(p'*p) - thk/2

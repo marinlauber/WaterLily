@@ -11,6 +11,7 @@
 
   <data:vector name="Forces"/>
   <data:vector name="Displacements"/>
+  <data:scalar name="Knots"/>
 
   <!-- <mesh name="Nurbs-Mesh-Fluid" dimensions="2">
     <use-data name="Displacements"/>
@@ -28,9 +29,14 @@
     <use-data name="Forces"/>
   </mesh>
 
+  <mesh name="Knots-Mesh" dimensions="2">
+    <use-data name="Knots"/>
+  </mesh>
+
   <participant name="Splines">
     <provide-mesh name="Nurbs-Mesh-Solid" />
     <provide-mesh name="Force-Mesh-Solid" />
+    <provide-mesh name="Knots-Mesh" />
     <write-data name="Displacements" mesh="Nurbs-Mesh-Solid" />
     <read-data  name="Forces" mesh="Force-Mesh-Solid" />
   </participant>
@@ -40,6 +46,7 @@
     <!-- <provide-mesh name="Force-Mesh-Fluid" /> -->
     <receive-mesh name="Force-Mesh-Solid" from="Splines" />
     <receive-mesh name="Nurbs-Mesh-Solid" from="Splines" />
+    <receive-mesh name="Knots-Mesh" from="Splines" />
     <write-data name="Forces" mesh="Force-Mesh-Solid" />
     <read-data  name="Displacements" mesh="Nurbs-Mesh-Solid" />
     <!-- <mapping:nearest-neighbor

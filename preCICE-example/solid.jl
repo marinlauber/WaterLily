@@ -58,13 +58,17 @@ integration_points = uv_integration(struc)
 
 vertices_nurbs = Array{Float64,2}(undef, size(mesh.controlPoints[1:2,:]'))
 vertices_forces = Array{Float64,2}(undef, length(integration_points), dimensions)
+vertices_knots = Array{Float64,2}(undef, length(mesh.knots), dimensions)
 vertices_nurbs .= mesh.controlPoints[1:2,:]'
 vertices_forces[:,1] .= integration_points[:] # the mesh is only defined in the parametric spaces
 vertices_forces[:,2] .= 0.0
+vertices_knots[:,1] .= mesh.knots
+vertices_knots[:,2] .= 1:length(mesh.knots)
 
 # set mesh vertex and give access to precice
 vertexIDs_nurbs = PreCICE.setMeshVertices("Nurbs-Mesh-Solid", vertices_nurbs)
 vertexIDs_forces = PreCICE.setMeshVertices("Force-Mesh-Solid", vertices_forces)
+vertexIDs_knots = PreCICE.setMeshVertices("Knots-Mesh", vertices_knots)
 
 # wierdly this allows to access both meshes...
 PreCICE.setMeshAccessRegion("Nurbs-Mesh-Solid",[-1. 1.; -1. 1.])

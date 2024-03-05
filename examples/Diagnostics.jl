@@ -1,13 +1,13 @@
 using StaticArrays
 using ForwardDiff
-using LinearAlgebra: ×, tr, norm, I # can this be an issue?
+using LinearAlgebra: ×, tr, norm # can this be an issue?
 using WaterLily: kern, ∂, inside_u, AbstractBody
 using WaterLily
 include("TwoD_plots.jl")
 
-# viscous stress tensor, I here is the kronecker delta
-∇²u(J::CartesianIndex{2},u) = @SMatrix [(1+I[i,j])*∂(i,j,J,u) for i ∈ 1:2, j ∈ 1:2]
-∇²u(J::CartesianIndex{3},u) = @SMatrix [(1+I[i,j])*∂(i,j,J,u) for i ∈ 1:3, j ∈ 1:3]
+# viscous stress tensor
+∇²u(I::CartesianIndex{2},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:2, j ∈ 1:2]
+∇²u(I::CartesianIndex{3},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:3, j ∈ 1:3]
 """normal componenent integration kernel"""
 @inline function nds(body::AbstractBody,x,t)
     d,n,_ = measure(body,x,t)
@@ -43,6 +43,11 @@ function diagnostics(a::Simulation,x₀::SVector{N,T}) where {N,T}
     moment=sum(@inbounds(a.flow.σ[inside(a.flow.p)]))
     return force,moment
 end
+function ∮ν∇u_nds(u::AbstractArray{T,N},df::AbstractArray{T},body::AbstractBody,t=0,ε=1.) where {T,N}
+    @loop df[I,:] .= u[I,:]*nds_ϵ(body,loc(0,I,T),t,ε)/(ϵ+WaterLily.μ₁(0.0,ϵ)) over I ∈ inside(p)
+    [sum(@inbounds(df[inside(p),i])) for i ∈ 1:N] |> Array
+end
+
 function test()
     N=128; Λ=2
     body = AutoBody((x,t)->√sum(abs2,(x.-N÷2)./SA[1.,Λ])-N÷4/Λ)

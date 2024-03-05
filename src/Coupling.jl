@@ -178,20 +178,20 @@ struct IQNCoupling{T,Vf<:AbstractArray{T},Mf<:AbstractArray{T}} <: AbstractCoupl
     V :: Mf                # primary residual difference
     W :: Mf                # primary variable difference
     c :: AbstractArray{T}  # least-square coefficients
-    P :: ResidualSum       # preconditionner
+    P :: ResidualSum{T}    # preconditionner
     QR :: QRFactorization  # QR factorization
     subs :: Tuple          # sub residual indices
     svec :: Tuple
-    iter :: Dict{Symbol,Int32}      # iteration counter
+    iter :: Dict{Symbol,Int16}      # iteration counter
     function IQNCoupling(primary::AbstractArray{T},secondary::AbstractArray{T};
                          relax::T=0.5,maxCol::Integer=200,mem=Array) where T
         n₁,m₁=size(primary); n₂,m₂=size(secondary); N = m₁*n₁+m₂*n₂; M = min(N÷2,maxCol)
-        x⁰,x,r = zeros(N) |> mem, zeros(N) |> Array, zeros(N) |> Array
+        x⁰,x,r =      zeros(N) |> mem,     zeros(N) |> mem, zeros(N) |> mem
         V, W, c = zeros((N,M)) |> mem, zeros((N,M)) |> mem, zeros(M) |> mem
         subs = (1:m₁,m₁+1:n₁*m₁,n₁*m₁+1:n₁*m₁+m₂,n₁*m₁+m₂+1:N)
         concatenate!(x⁰,primary,secondary,subs); svec = (1:n₁*m₁,n₁*m₁+1:N)
-        new{T,typeof(x⁰),typeof(V)}(relax,x⁰,x,r,V,W,c,ResidualSum(N),
-                                    QRFactorization(copy(V),zeros(M,M),0,0),
+        new{T,typeof(x⁰),typeof(V)}(relax,x⁰,x,r,V,W,c,ResidualSum(N;T=T,mem=mem),
+                                    QRFactorization(V,0,0;f=mem),
                                     subs,svec,Dict(:k=>0,:first=>1))
     end
 end
@@ -199,7 +199,7 @@ function update_VW!(cp,x,r)
     roll!(cp.V); roll!(cp.W)
     cp.V[:,1] = r .- cp.r;
     cp.W[:,1] = x .- cp.x̃;
-    min(cp.iter[:k],cp.QR.cols+1)
+    min(cp.iter[:k],cp.QR.dims[1]+1)
 end
 function update!(cp::IQNCoupling{T}, xᵏ, kwarg) where T
     # compute the residuals
@@ -225,7 +225,7 @@ function update!(cp::IQNCoupling{T}, xᵏ, kwarg) where T
         # relaxation update
         xᵏ .= cp.x .+ cp.ω*cp.r; cp.x .= xᵏ
     else
-        k = min(cp.iter[:k],cp.QR.cols) # default we do not insert a column
+        k = min(cp.iter[:k],cp.QR.dims[1]) # default we do not insert a column
         if !Bool(cp.iter[:first]) # on a first iteration, we simply apply the relaxation
             @debug "updating V and W matrix"
             k = update_VW!(cp,xᵏ,rᵏ)
@@ -241,8 +241,8 @@ function update!(cp::IQNCoupling{T}, xᵏ, kwarg) where T
         apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=ε)
         cp.V .*= cp.P.iw # revert scaling
         # solve least-square problem 
-        R = @view cp.QR.R[1:cp.QR.cols,1:cp.QR.cols]
-        Q = @view cp.QR.Q[:,1:cp.QR.cols]
+        R = @view cp.QR.R[1:cp.QR.dims[1],1:cp.QR.dims[1]]
+        Q = @view cp.QR.Q[:,1:cp.QR.dims[1]]
         rᵏ .*= cp.P.w # apply preconditioer to the residuals
         # compute coefficients
         cᵏ = backsub(R,-Q'*rᵏ); cp.c[1:length(cᵏ)] .= cᵏ
@@ -263,7 +263,7 @@ function finalize!(cp::IQNCoupling, xᵏ)
     # apply the residual sum preconditioner, without recalculating
     cp.V .*= cp.P.w
     # QR decomposition and filter columns
-    k = min(cp.iter[:k],cp.QR.cols+1)
+    k = min(cp.iter[:k],cp.QR.dims[1]+1)
     apply_QR!(cp.QR, cp.V, cp.W, k, singularityLimit=0.0)
     cp.V .*= cp.P.iw # revert scaling
     # reset the preconditionner

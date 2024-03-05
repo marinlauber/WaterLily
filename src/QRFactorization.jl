@@ -3,12 +3,13 @@ using Logging
 """
     Residual sum preconditionner
 """
-struct ResidualSum
-    residualSum :: AbstractArray{Float64}
-    w :: AbstractArray{Float64}
-    iw :: AbstractArray{Float64}
-    function ResidualSum(N)
-        new(zeros(N),ones(N),ones(N))
+struct ResidualSum{T}
+    residualSum :: AbstractArray{T}
+    w :: AbstractArray{T}
+    iw :: AbstractArray{T}
+    function ResidualSum(N;T=Float64,mem=Array)
+        r₀, w, iw = zeros(N) |> mem, ones(N) |> mem, ones(N) |> mem
+        new{T}(r₀,w,iw)
     end
 end
 # reset the summation
@@ -37,11 +38,15 @@ end
 Strcuture to hold the facorisation of the coupling matrices.
 """
 # @TODO make it immutable 
-mutable struct QRFactorization{T}
-    Q::Matrix{T}
-    R::Matrix{T}
-    cols::Int # how many are use actually
-    rows::Int
+struct QRFactorization{T}
+    Q :: Matrix{T}
+    R :: Matrix{T}
+    dims :: Vector{Int16} # cols and rows that we actually use, store on the CPU
+    function QRFactorization(V::AbstractMatrix{T}, cols, rows; f=Array) where T
+        N,M = size(V)
+        Q, R = zeros((N,M)) |> f, zeros((M,M)) |> f
+        new{T}(Q, R, [cols, rows])
+    end
 end
 """
     QRFactorization(V::AbstractAMtrix{T},singularityLimit::T)
@@ -50,10 +55,10 @@ Compute and return the QR factorisation of the matrix `V` with a singularity lim
 The singularity limit sets the threshold for the ratio of the orthogonalized vector to the original vector.
 """
 function QRFactorization(V::AbstractMatrix{T},singularityLimit::T) where T
-    QR = QRFactorization(zero(V), zero(V), 0, 0);
+    QR = QRFactorization(V, 0, 0);
     delIndices=[];
     for i in 1:size(V,2)
-        inserted = insertColumn!(QR, QR.cols+1, V[:,i], singularityLimit)
+        inserted = insertColumn!(QR, QR.dims[1]+1, V[:,i], singularityLimit)
         if !inserted
             push!(delIndices, i)
         end
@@ -67,11 +72,11 @@ Compute the QR facorisation of `V` for a given singularity limit and delete the 
 `V` and `W` that do not pass the threshold criterion.
 """
 function apply_QR!(QR::QRFactorization{T}, V, W, _col; singularityLimit::T=1e-2) where T
-    delIndices=[]; QR.cols = 0; QR.rows = 0;
+    delIndices=[]; QR.dims .= 0
     _col = min(_col,size(V,2))
     for i in 1:_col
         # recomputing the QR factorization every time
-        inserted = insertColumn!(QR, QR.cols+1, V[:,i], singularityLimit)
+        inserted = insertColumn!(QR, QR.dims[1]+1, V[:,i], singularityLimit)
         if !inserted
             push!(delIndices, i)
         end
@@ -92,16 +97,16 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
     # copy to avoid overwriting
     v = copy(vec)
 
-    if QR.cols == 0
-        QR.rows = length(v)
+    if QR.dims[1] == 0
+        QR.dims[2] = length(v)
     end
     applyFilter = singularityLimit > zero(T)
 
     # we add a column
-    QR.cols += 1
+    QR.dims[1] += 1
 
     # orthogonalize v to columns of Q
-    u = zeros(T, QR.cols)
+    u = zeros(T, QR.dims[1])
     rho_orth = zero(T)
     rho0 = zero(T)
 
@@ -110,49 +115,49 @@ function insertColumn!(QR::QRFactorization{T}, k::Int, vec::Vector{T}, singulari
     end
 
     # try to orthogonalize the new vector
-    err, rho_orth = orthogonalize(QR.Q, v, u, QR.cols-1)
+    err, rho_orth = orthogonalize(QR.Q, v, u, QR.dims[1]-1)
     
     if rho_orth <= eps(T) || err < 0
         @debug "The ratio ||v_orth|| / ||v|| is extremely small and either the orthogonalization process of column v failed or the system is quadratic."
-        QR.cols -= 1
+        QR.dims[1] -= 1
         return false
     end
 
     if applyFilter && (rho0 * singularityLimit > rho_orth)
         @debug "Discarding column as it is filtered out by the QR2-filter: rho0 * eps > rho_orth: $(rho0 * singularityLimit) > $rho_orth"
-        QR.cols -= 1
+        QR.dims[1] -= 1
         return false
     end
 
     # populate new column and row with zeros, they exist, they are just not shown
-    QR.R[:, QR.cols] .= zeros(T)
-    QR.R[QR.cols, :] .= zeros(T)
+    QR.R[:, QR.dims[1]] .= zeros(T)
+    QR.R[QR.dims[1], :] .= zeros(T)
 
     # Shift columns to the right
-    for j in QR.cols-1:-1:k
+    for j in QR.dims[1]-1:-1:k
         for i in 1:j
             QR.R[i, j + 1] = QR.R[i, j]
         end
     end
     # reset diagonal
-    for j in k+1:QR.cols
+    for j in k+1:QR.dims[1]
         QR.R[j, j] = zero(T)
     end
     
     # add to the right
-    QR.Q[:, QR.cols] = v
+    QR.Q[:, QR.dims[1]] = v
 
     # Maintain decomposition and orthogonalization by application of Givens rotations
-    for l in QR.cols-2:-1:k
+    for l in QR.dims[1]-2:-1:k
         s,g = computeReflector(u[l], u[l + 1])
-        Rr1 = QR.R[l, 1:QR.cols]
-        Rr2 = QR.R[l + 1, 1:QR.cols]
-        applyReflector!(s, g, l + 1, QR.cols, Rr1, Rr2)
-        QR.R[l, 1:QR.cols] = Rr1
-        QR.R[l + 1, 1:QR.cols] = Rr2
+        Rr1 = QR.R[l, 1:QR.dims[1]]
+        Rr2 = QR.R[l + 1, 1:QR.dims[1]]
+        applyReflector!(s, g, l + 1, QR.dims[1], Rr1, Rr2)
+        QR.R[l, 1:QR.dims[1]] = Rr1
+        QR.R[l + 1, 1:QR.dims[1]] = Rr2
         Qc1 = QR.Q[:, l]
         Qc2 = QR.Q[:, l + 1]
-        applyReflector!(s, g, 1, QR.rows, Qc1, Qc2)
+        applyReflector!(s, g, 1, QR.dims[2], Qc1, Qc2)
         QR.Q[:, l] = Qc1
         QR.Q[:, l + 1] = Qc2
     end

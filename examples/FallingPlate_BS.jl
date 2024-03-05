@@ -42,13 +42,12 @@ thk=2ϵ+√2
 
 # stiffness parameters
 Fg = B*EI/L^2
-@show Fg
 
 # spline distance function
 dis(p,n) = √(p'*p) - thk/2
 
 # construct from mesh, this can be tidy
-u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:].*L.+[2.5L,11L].+1.5)
+u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:].*L.+[1.5L,L].+1.5)
 nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
 
 # flow sim
@@ -58,45 +57,40 @@ body = DynamicBody(nurbs, (0,1); dist=dis);
 integration_points = uv_integration(struc)
 
 # make a coupled sim
-global X_cm = mean(sim.body.surf.(0:0.1:1,0.0);dims=1)[1]
-global U_cm = mean(sim.body.surf.(0:0.1:1,0.0);dims=1)[1]
-Ut(i,t) = U_cm[i]
-sim = CoupledSimulation((6L,12L),Ut,L,body,struc,IQNCoupling;
+global U_cm = SA[0.,0.]
+global X_cm = SA[0.,0.]
+Ut(i,t) = -U_cm[i]
+sim = CoupledSimulation((4L,4L),Ut,L,body,struc,IQNCoupling;
                          U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=12,T=Float64)
 
 # sime time
-t₀ = round(sim_time(sim)); duration = 20.0; step = 0.2
+t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
 iterations = []
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
     
-    # sim_step!(sim,tᵢ)
-
     # update until time tᵢ in the background
-    t = sum(sim.flow.Δt[1:end-1])
-    
-    while t < tᵢ*sim.L/sim.U
+    while WaterLily.time(sim) < tᵢ*sim.L/sim.U
         
-        println("  tᵢ=$tᵢ, t=$(round(t,digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
+        println("  t=$(round(WaterLily.time(sim),digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
         # save at start of iterations
         store!(sim); iter=1;
 
+        # get position and velocity of CM of structure
+        global X_cm = SA[mean(points(sim.struc).*sim.L;dims=2)...]
+        global U_cm = SA[mean(vⁿ(sim.struc);dims=2)...]
+        @show X_cm, U_cm
+
         # iterative loop
         while true
 
-            # get position and velocity of cm
-            global X_cm = mean(sim.body.surf.(0:0.1:1,0.0)    ;dims=1)[1]
-            global U_cm = mean(sim.body.velocity.(0:0.1:1,0.0);dims=1)[1]
-
-            @show X_cm, U_cm
-
-            #  integrate once in time
+            # integrate once in time
             solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
-            measure!(sim,t); mom_step!(sim.flow,sim.pois)
+            ParametricBodies.update!(sim.body,u⁰.+(sim.L*sim.pnts.-X_cm),sim.flow.Δt[end])
+            measure!(sim); mom_step!(sim.flow,sim.pois)
 
             # get new coupling variable
             sim.pnts .= points(sim.struc)
@@ -110,23 +104,19 @@ iterations = []
             converged = update!(sim.cpl, sim.pnts, sim.forces, 0.0)
 
             # check for convengence
-            (converged || iter+1 > 50) && break
+            (converged || iter+1 > 20) && break
 
             # if we have not converged, we must revert
             revert!(sim); iter += 1
         end
         push!(iterations,iter)
-        println(" beam length: ", integrate(sim.body.surf))
-        # finish the time step
-        t += sim.flow.Δt[end]
     end
 
-    # println("tU/L=",round(tᵢ,digits=4),", Δt=",round(sim.flow.Δt[end],digits=3))
     get_omega!(sim); plot_vorticity(sim.flow.σ, limit=10)
     plot!(sim.body.surf;add_cp=false)
     plot!(title="tU/L $tᵢ")
 
     # check that we are still inside the domain
-    pos = sum(sim.body.surf.pnts;dims=2)/size(sim.body.surf.pnts,2)
+    pos = mean(sim.body.surf.pnts;dims=2)
     !(all(pos.>[0.,0.]) && all(pos.<size(sim.flow.p))) && break
 end

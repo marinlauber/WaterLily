@@ -1,5 +1,6 @@
 using WaterLily
 using ParametricBodies
+using ParametricBodies: PForce, VForce
 using Splines
 using StaticArrays
 using LinearAlgebra
@@ -7,41 +8,36 @@ include("TwoD_plots.jl")
 include("../src/Coupling.jl")
 
 function force(b::DynamicBody,flow::Flow)
-    reduce(hcat,[NurbsForce(b.surf,flow.p,s) for s ∈ integration_points])
+    reduce(hcat,[PForce(b.surf,flow.p,s)+flow.ν*VForce(b.surf,flow.p,s) for s ∈ integration_points])
 end
-
 function mean(p::AbstractArray;dims=1)
     sum(p,dims=dims)/size(p,dims)
 end
 
-# Material properties and mesh
+
+## Simulation parameters
+L=2^5
+Re=200; U=1
+ϵ=0.5; thk=2ϵ+√2
+B = 1000       # scaled stiffness/buouancy
+density(ξ) = 2.0 # mass for correct mass ratio
+g = U^2/(density(0.0)-1.0)/thk # gravity force
+EI = (density(0.0)-1.0)*thk/B #0.001    # Cauhy number
+EA = 50_000.0  # make inextensible
+
+# Mesh property
 numElem=10
 degP=3
 ptLeft = 0.0
 ptRight = 1.0
-
-# parameters
-EI = 0.001    # Cauhy number
-EA = 50_000.0  # make inextensible
-density(ξ) = 1.0  # mass ratio
-B = 100
-
 # mesh
 mesh, gauss_rule = Mesh1D(ptLeft, ptRight, numElem, degP)
 
 # make a structure
+gravity(i,ξ::T) where T = i==2 ? convert(T,-g) : zero(T)
 struc = DynamicFEOperator(mesh, gauss_rule, EI, EA, 
-                          [], [], ρ=density; ρ∞=0.0)
+                          [], [], ρ=density, g=gravity; ρ∞=0.0)
 
-## Simulation parameters
-L=2^5
-Re=200
-U=1
-ϵ=0.5
-thk=2ϵ+√2
-
-# stiffness parameters
-Fg = B*EI/L^2
 
 # spline distance function
 dis(p,n) = √(p'*p) - thk/2
@@ -64,7 +60,7 @@ sim = CoupledSimulation((4L,4L),Ut,L,body,struc,IQNCoupling;
                          U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=12,T=Float64)
 
 # sime time
-t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
+t₀ = round(sim_time(sim)); duration = 25.0; step = 0.2
 iterations = []
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -96,9 +92,6 @@ iterations = []
             sim.pnts .= points(sim.struc)
             sim.forces .= force(sim.body,sim.flow)
 
-            # gravity force
-            sim.forces[2,:] .-= 0.5 # add vertical gravity force
-
             # accelerate coupling
             print("    iteration: ",iter)
             converged = update!(sim.cpl, sim.pnts, sim.forces, 0.0)
@@ -112,7 +105,7 @@ iterations = []
         push!(iterations,iter)
     end
 
-    get_omega!(sim); plot_vorticity(sim.flow.σ, limit=10)
+    get_omega!(sim); flood(sim.flow.σ;shift=(.5,.5),clims=(-10,10),dpi=300) #plot_vorticity(sim.flow.σ, limit=10)
     plot!(sim.body.surf;add_cp=false)
     plot!(title="tU/L $tᵢ")
 

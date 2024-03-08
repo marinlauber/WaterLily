@@ -8,6 +8,7 @@ include("TwoD_plots.jl")
 L=2^6
 Re=80
 U=1
+U=1
 ϵ=0.5
 thk=2ϵ+√2
 center = SA[4L,4L]
@@ -79,9 +80,3 @@ anim = @animate for tᵢ in range(t₀,t₀+duration;step=tstep)
 end
 # save gif
 gif(anim, "cylinder_flow_nurbs.gif", fps=24)
-
-time = cumsum(sim.flow.Δt[1:end-1])
-plot(time[4:end]/sim.L,pforces[4:end]/32,label="Pressure");
-plot!(time[4:end]/sim.L,sim.flow.ν.*vforces[4:end]/32,label="Viscous"); ylims!(0,2)
-xlabel!("Convective time tU/L"); ylabel!("Force coefficient")
-savefig("forces_nurbs_validation.png")

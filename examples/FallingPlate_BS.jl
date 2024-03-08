@@ -4,6 +4,8 @@ using ParametricBodies: PForce, VForce
 using Splines
 using StaticArrays
 using LinearAlgebra
+using BiotSavartBCs
+using JLD2
 include("TwoD_plots.jl")
 include("../src/Coupling.jl")
 
@@ -54,13 +56,16 @@ integration_points = uv_integration(struc)
 
 # make a coupled sim
 global U_cm = SA[0.,0.]
-global X_cm = SA[0.,0.]
+global X = SA[0.,0.]
 Ut(i,t) = -U_cm[i]
 sim = CoupledSimulation((4L,4L),Ut,L,body,struc,IQNCoupling;
                          U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=12,T=Float64)
 
+# Multilevel Biot-Savart
+ω = MLArray(sim.flow.σ)
+
 # sime time
-t₀ = round(sim_time(sim)); duration = 25.0; step = 0.2
+t₀ = round(sim_time(sim)); duration = 35.0; step = 0.2
 iterations = []
 # time loop
 @time @gif for tᵢ in range(t₀,t₀+duration;step)
@@ -68,15 +73,15 @@ iterations = []
     # update until time tᵢ in the background
     while WaterLily.time(sim) < tᵢ*sim.L/sim.U
         
-        println("  t=$(round(WaterLily.time(sim),digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
+        println("  t=$(round(sim_tim(sim),digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
         # save at start of iterations
         store!(sim); iter=1;
 
         # get position and velocity of CM of structure
-        global X_cm = SA[mean(points(sim.struc).*sim.L;dims=2)...]
+        global X = SA[mean(points(sim.struc).*sim.L;dims=2)...]
         global U_cm = SA[mean(vⁿ(sim.struc);dims=2)...]
-        @show X_cm, U_cm
+        @show X, U_cm
 
         # iterative loop
         while true
@@ -85,8 +90,8 @@ iterations = []
             solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+(sim.L*sim.pnts.-X_cm),sim.flow.Δt[end])
-            measure!(sim); mom_step!(sim.flow,sim.pois)
+            ParametricBodies.update!(sim.body,u⁰.+(sim.L*sim.pnts.-X),sim.flow.Δt[end])
+            measure!(sim); biot_mom_step!(sim.flow,sim.pois,ω)
 
             # get new coupling variable
             sim.pnts .= points(sim.struc)
@@ -105,10 +110,12 @@ iterations = []
         push!(iterations,iter)
     end
 
-    get_omega!(sim); flood(sim.flow.σ;shift=(.5,.5),clims=(-10,10),dpi=300) #plot_vorticity(sim.flow.σ, limit=10)
-    plot!(sim.body.surf;add_cp=false)
+    N = size(sim.flow.σ)
+    get_omega!(sim); flood(sim.flow.σ;shift=(X[1],X[2]),clims=(-10,10),dpi=300) #plot_vorticity(sim.flow.σ, limit=10)
+    plot!(sim.body.surf;add_cp=false,shift=(X[1],X[2]))
+    xlims!(-2N[1],3N[1]); ylims!(-6N[2],N[2])
     plot!(title="tU/L $tᵢ")
-
+    
     # check that we are still inside the domain
     pos = mean(sim.body.surf.pnts;dims=2)
     !(all(pos.>[0.,0.]) && all(pos.<size(sim.flow.p))) && break

@@ -1,4 +1,5 @@
 using Plots; gr()
+using ColorSchemes, Colors
 
 function get_omega!(sim)
     body(I) = sum(WaterLily.ϕ(i,CartesianIndex(I,i),sim.flow.μ₀) for i ∈ 1:2)/2
@@ -9,7 +10,13 @@ plot_vorticity(ω; limit=maximum(abs,ω)) = contourf(clamp.(ω|>Array,-limit,lim
                color=palette(:RdBu_11), clims=(-limit, limit), linewidth=0,
                aspect_ratio=:equal, legend=false, border=:none)
 
-function flood(f::AbstractArray;shift=(0.,0.),cfill=:RdBu_11,clims=(),levels=10,kv...)
+function modify_alpha(cscheme::ColorScheme, alpha::Vector{T}, newname::String) where T<: AbstractFloat
+    size(cscheme.colors, 1) == size(alpha, 1) || error("Vector alpha must have the same size as colors")
+    ColorScheme([Colors.RGBA(c.r, c.g, c.b, a) for (c,a) in zip(cscheme.colors, alpha)], newname, "")
+end
+RdBu_alpha=modify_alpha(ColorSchemes.RdBu, [reverse((1:5)./5)...,0.,(1:5)./5...], "mycscheme")
+            
+function flood(f::AbstractArray;shift=(0.,0.),clims=(),levels=10,cfill=palette(RdBu_alpha,256),kv...)
     f = f |> Array  # make sure it's an array
     if length(clims)==2
         @assert clims[1]<clims[2]

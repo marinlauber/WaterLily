@@ -5,7 +5,7 @@ using WaterLily: kern, ∂, inside_u, AbstractBody
 using WaterLily
 include("TwoD_plots.jl")
 
-# viscous stress tensor
+# viscous stress tensor, 
 ∇²u(I::CartesianIndex{2},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:2, j ∈ 1:2]
 ∇²u(I::CartesianIndex{3},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:3, j ∈ 1:3]
 """normal componenent integration kernel"""
@@ -43,11 +43,22 @@ function diagnostics(a::Simulation,x₀::SVector{N,T}) where {N,T}
     moment=sum(@inbounds(a.flow.σ[inside(a.flow.p)]))
     return force,moment
 end
-function ∮ν∇u_nds(u::AbstractArray{T,N},df::AbstractArray{T},body::AbstractBody,t=0,ε=1.) where {T,N}
-    @loop df[I,:] .= u[I,:]*nds_ϵ(body,loc(0,I,T),t,ε)/(ϵ+WaterLily.μ₁(0.0,ϵ)) over I ∈ inside(p)
-    [sum(@inbounds(df[inside(p),i])) for i ∈ 1:N] |> Array
-end
 
+using StaticArrays
+# viscous stress tensor,using StaticArrays avoid allocation of memory is efficient for tensor-vector operations
+∇²u(I::CartesianIndex{2},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:2, j ∈ 1:2]
+∇²u(I::CartesianIndex{3},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:3, j ∈ 1:3]
+"""
+    ∮τnds(u::AbstractArray{T,N},df::AbstractArray{T},body::AbstractBody,t=0)
+
+Compute the viscous force on a immersed body. 
+"""
+function ∮τnds(u::AbstractArray{T,N},df::AbstractArray{T,N},body::AbstractBody,t=0) where {T,N}
+    Nu,_ = WaterLily.size_u(u); In = CartesianIndices(map(i->(2:i-1),Nu)) 
+    @WaterLily.loop df[I,:] .= ∇²u(I,u)*nds(body,loc(0,I,T),t) over I ∈ inside(In)
+    [sum(@inbounds(df[inside(In),i])) for i ∈ 1:N-1] |> Array
+end
+# 
 function test()
     N=128; Λ=2
     body = AutoBody((x,t)->√sum(abs2,(x.-N÷2)./SA[1.,Λ])-N÷4/Λ)
@@ -74,50 +85,55 @@ function test()
     plot!(resolutions,m,label="Pressure moments")
     savefig("pressure_force_1.png")
 end
-# """Circle function"""
-# function circle(L=32;m=6,n=4,Re=80,U=1,T=Float32)
-#     radius, center = L/2, max(n*L/2,L)
-#     body = AutoBody((x,t)->√sum(abs2, x .- center) - radius)
-#     Simulation((m*L,n*L), (U,0), radius; ν=U*radius/Re, body, T)
-# end
-# sim = circle(64;m=12,n=8,Re=80,U=1,T=Float64)
 
-# # intialize
-# t₀ = sim_time(sim); duration = 10; tstep = 0.1
-# forces_p = []; forces_ν = []; p_trace = [];
-# forces_p_old = []
 
-# # step and plot
-# @time @gif for tᵢ in range(t₀,t₀+duration;step=tstep)
-#     # update until time tᵢ in the background
-#     t = sum(sim.flow.Δt[1:end-1])
-#     while t < tᵢ*sim.L/sim.U
+"""Circle function"""
+function circle(L=32;m=6,n=4,Re=80,U=1,T=Float32)
+    radius, center = L/2, max(n*L/2,L)
+    body = AutoBody((x,t)->√sum(abs2, x .- center) - radius)
+    Simulation((m*L,n*L), (U,0), radius; ν=U*radius/Re, body, T)
+end
+sim = circle(64;m=12,n=8,Re=80,U=1,T=Float64)
 
-#         # update flow
-#         mom_step!(sim.flow,sim.pois)
+# intialize
+t₀ = sim_time(sim); duration = 10; tstep = 0.1
+forces_p = []; forces_ν = [];
+forces_p_old = []; forces_ν2 = [];
+
+# step and plot
+@time @gif for tᵢ in range(t₀,t₀+duration;step=tstep)
+    # update until time tᵢ in the background
+    t = sum(sim.flow.Δt[1:end-1])
+    while t < tᵢ*sim.L/sim.U
+
+        # update flow
+        mom_step!(sim.flow,sim.pois)
         
-#         # pressure force
-#         force = -2WaterLily.∮nds(sim.flow.p,sim.flow.f,sim.body,0.0)
-#         push!(forces_p_old,force)
-#         force = -2∮nds_ϵ(sim.flow.p,sim.flow.f,sim.body,0.0)
-#         vforce = 2sim.flow.ν.*∮∇²u_nds(sim.flow.u,sim.flow.f,sim.body,0.0)
-#         push!(forces_p,force); push!(forces_ν,vforce)
-#         # push!(p_trace,sim.flow.p[100,200])
-#         # update time
-#         t += sim.flow.Δt[end]
-#     end
+        # pressure force
+        force = -2WaterLily.∮nds(sim.flow.p,sim.flow.f,sim.body,0.0)
+        push!(forces_p_old,force)
+        force = -2∮nds_ϵ(sim.flow.p,sim.flow.f,sim.body,0.0)
+        vforce = 2sim.flow.ν.*∮τnds(sim.flow.u,sim.flow.f,sim.body,0.0)
+        vforce2 = 2sim.flow.ν.*∮τds(sim.flow.u,sim.flow.f,sim.body,0.0)
+        push!(forces_p,force); push!(forces_ν,vforce); push!(forces_ν2,vforce2)
+        # push!(p_trace,sim.flow.p[100,200])
+        # update time
+        t += sim.flow.Δt[end]
+    end
   
-#     # print time step
-#     println("tU/L=",round(tᵢ,digits=4),",  Δt=",round(sim.flow.Δt[end],digits=3))
-#     a = sim.flow.σ;
-#     @inside a[I] = WaterLily.curl(3,I,sim.flow.u)*sim.L/sim.U
-#     flood(a[inside(a)],clims=(-10,10), legend=false); body_plot!(sim)
-#     contour!(sim.flow.p[inside(a)]',levels=range(-1,1,length=10),
-#              color=:black,linewidth=0.5,legend=false)
-# end
-# # forces_p = reduce(vcat,forces_p')
-# # forces_ν = reduce(vcat,forces_ν')
-# # forces_p_old = reduce(vcat,forces_p_old')
-# # plot(forces_p[4:end,1]/(π*sim.L),label="pressure force")
-# # plot!(forces_p_old[4:end,1]/(π*sim.L),label="pressure force old")
-# # plot!(forces_ν[4:end,1]/(π*sim.L),label="viscous force")
+    # print time step
+    println("tU/L=",round(tᵢ,digits=4),",  Δt=",round(sim.flow.Δt[end],digits=3))
+    a = sim.flow.σ;
+    @inside a[I] = WaterLily.curl(3,I,sim.flow.u)*sim.L/sim.U
+    flood(a[inside(a)],clims=(-10,10), legend=false); body_plot!(sim)
+    contour!(sim.flow.p[inside(a)]',levels=range(-1,1,length=10),
+             color=:black,linewidth=0.5,legend=false)
+end
+forces_p = reduce(vcat,forces_p')
+forces_ν = reduce(vcat,forces_ν')
+forces_ν2 = reduce(vcat,forces_ν2')
+forces_p_old = reduce(vcat,forces_p_old')
+# plot(forces_p[4:end,1]/(π*sim.L),label="pressure force")
+# plot!(forces_p_old[4:end,1]/(π*sim.L),label="pressure force old")
+plot(forces_ν[4:end,1]/(π*sim.L),label="viscous force")
+plot!(forces_ν2[4:end,1]/(π*sim.L),label="viscous force2")

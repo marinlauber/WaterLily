@@ -15,17 +15,24 @@ end
 function mean(p::AbstractArray;dims=1)
     sum(p,dims=dims)/size(p,dims)
 end
-
+function ∫dξ(f) 
+    x,w=Splines.gausslegendre(64)
+    dot(w./2,f.((x.+1)./2))
+end
 
 ## Simulation parameters
 L=2^5
 Re=200; U=1
 ϵ=0.5; thk=2ϵ+√2
 B = 1000       # scaled stiffness/buouancy
-density(ξ) = 2.0 # mass for correct mass ratio
-g = U^2/(density(0.0)-1.0)/thk # gravity force
-EI = (density(0.0)-1.0)*thk/B #0.001    # Cauhy number
-EA = 50_000.0  # make inextensible
+density(ξ) = 0.75+2.5ξ # mass for correct mass ratio
+g = U^2/(∫dξ(density)-1.0)/thk # gravity force
+EI(ξ) = (∫dξ(density)-1.0)*thk/B #
+EI(a) = 0.001    # Cauhy number
+EA(ξ) = 50_000.0  # make inextensible
+@show g, EI, EA
+
+bump(ξ;μ=0.5,σ=.1,C=0.) = C+exp(-0.5(ξ-μ)^2/σ^2)
 
 # Mesh property
 numElem=10
@@ -73,7 +80,7 @@ iterations = []
     # update until time tᵢ in the background
     while WaterLily.time(sim) < tᵢ*sim.L/sim.U
         
-        println("  t=$(round(sim_tim(sim),digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
+        println("  t=$(round(sim_time(sim),digits=2)), Δt=$(round(sim.flow.Δt[end],digits=2))")
 
         # save at start of iterations
         store!(sim); iter=1;

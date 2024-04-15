@@ -127,14 +127,23 @@ function BDIM!(a::Flow)
     @loop a.u[Ii] += μddn(Ii,a.μ₁,a.f)+a.V[Ii]+a.μ₀[Ii]*a.f[Ii] over Ii ∈ inside_u(size(a.p))
 end
 
+function press!(a::Flow{n},L,w=1) where n
+    dt = w*a.Δt[end]
+    for i ∈ 1:n  # apply pressure gradient
+        @loop a.u[I,i] -= dt*L[I,i]*∂(i,I,a.p) over I ∈ inside(a.p)
+    end
+end
+
 function project!(a::Flow{n},b::AbstractPoisson,w=1) where n
     dt = w*a.Δt[end]
-    @inside b.z[I] = div(I,a.u); b.x .*= dt # set source term & solution IC
+    @inside b.z[I] = div(I,a.u); #b.x .*= dt # set source term & solution IC
     solver!(b)
+    # solve for Φ and not p
     for i ∈ 1:n  # apply solution and unscale to recover pressure
         @loop a.u[I,i] -= b.L[I,i]*∂(i,I,b.x) over I ∈ inside(b.x)
     end
-    b.x ./= dt
+    # p¹ = p⁰ + Φ
+    a.p .+= b.x./dt
 end
 
 """
@@ -148,6 +157,7 @@ and the `AbstractPoisson` pressure solver to project the velocity onto an incomp
     # predictor u → u'
     U = BCTuple(a.U,time(a),N)
     conv_diff!(a.f,a.u⁰,a.σ,ν=a.ν,perdir=a.perdir)
+    press!(a,b.L)
     accelerate!(a.f,time(a),a.g,a.U)
     BDIM!(a); BC!(a.u,U,a.exitBC,a.perdir)
     a.exitBC && exitBC!(a.u,a.u⁰,U,a.Δt[end]) # convective exit
@@ -155,6 +165,7 @@ and the `AbstractPoisson` pressure solver to project the velocity onto an incomp
     # corrector u → u¹
     U = BCTuple(a.U,timeNext(a),N)
     conv_diff!(a.f,a.u,a.σ,ν=a.ν,perdir=a.perdir)
+    press!(a,b.L,0.5)
     accelerate!(a.f,timeNext(a),a.g,a.U)
     BDIM!(a); scale_u!(a,0.5); BC!(a.u,U,a.exitBC,a.perdir)
     project!(a,b,0.5); BC!(a.u,U,a.exitBC,a.perdir)

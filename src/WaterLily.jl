@@ -68,7 +68,7 @@ struct Simulation
         U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
         flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC)
         measure!(flow,body;ϵ)
-        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ;perdir))
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(copy(flow.p),flow.μ₀,flow.σ;perdir))
     end
 end
 

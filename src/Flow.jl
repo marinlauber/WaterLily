@@ -137,14 +137,21 @@ end
 function project!(a::Flow{n},b::AbstractPoisson,w=1) where n
     dt = w*a.Δt[end]
     @inside b.z[I] = div(I,a.u); #b.x .*= dt # set source term & solution IC
-    solver!(b)
+    open("mglog.txt","a") do io
+        print(io,WaterLily.L₂(b.z))
+    end 
+    solver!(b);
     # solve for Φ and not p
     for i ∈ 1:n  # apply solution and unscale to recover pressure
         @loop a.u[I,i] -= b.L[I,i]*∂(i,I,b.x) over I ∈ inside(b.x)
     end
+    open("mglog.txt","a") do io
+        println(io,",",WaterLily.L₂(b.x))
+    end 
     # p¹ = p⁰ + Φ
-    a.p .+= b.x./dt
+    a.p .+= b.x./dt; mean!(a.p)
 end
+mean!(a::AbstractArray) = a.-=sum(@inbounds(a[I]) for I ∈ inside(a))/length(inside(a))
 
 """
     mom_step!(a::Flow,b::AbstractPoisson)

@@ -107,6 +107,9 @@ end
 
 export AbstractSimulation,Simulation,sim_step!,sim_time,measure!
 
+include("PreCICE.jl")
+export Store,store!,revert!,initialize!,initialize,getDeformation
+
 # default WriteVTK functions
 function vtkWriter end
 function write! end

@@ -59,6 +59,18 @@ end
 
 using PreCICE
 function initialize!(;KnotMesh="KnotMesh",ControlPointMesh="ControlPointMesh",ForceMesh="ForceMesh")
+    
+    # keyword aguments might be specified
+    if size(ARGS, 1) < 1
+        configFileName = "precice-config.xml"
+    else
+        configFileName = ARGS[1]
+    end
+
+    # coupling
+    PreCICE.createParticipant("Fluid", configFileName, 0, 1)
+    println("I am participant WaterLily")
+
     # initilise PreCICE
     PreCICE.initialize()
 
@@ -71,9 +83,11 @@ function initialize!(;KnotMesh="KnotMesh",ControlPointMesh="ControlPointMesh",Fo
     ControlPointsID = Array{Int32}(ControlPointsID)
     ControlPoints = getControlPoints(ControlPoints, knots)
     
+    # get the quad points in parameter space
     (quadPointID, quadPoint) = getMeshVertexIDsAndCoordinates(ForceMesh)
     forces = zeros(reverse(size(quadPoint))...)
     quadPointID = Array{Int32}(quadPointID)
     quadPoint = quadPointUnpack(quadPoint)
+
     return ControlPointsID, ControlPoints, quadPointID, quadPoint, forces, knots
 end

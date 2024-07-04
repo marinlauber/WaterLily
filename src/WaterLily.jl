@@ -30,8 +30,6 @@ include("Metrics.jl")
 
 abstract type AbstractSimulation end
 
-abstract type AbstractSimulation end
-
 """
     Simulation(dims::NTuple, u_BC::Union{NTuple,Function}, L::Number;
                U=norm2(u_BC), Δt=0.25, ν=0., ϵ=1, perdir=()

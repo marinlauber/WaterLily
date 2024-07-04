@@ -24,6 +24,7 @@ function restrictML(b::Poisson)
     Poisson(ax,aL,copy(ax);b.perdir)
 end
 function restrictL!(a::AbstractArray{T},b;perdir=()) where T
+function restrictL!(a::AbstractArray{T},b;perdir=()) where T
     Na,n = size_u(a)
     for i ∈ 1:n
         @loop a[I,i] = restrictL(I,i,b) over I ∈ CartesianIndices(map(n->2:n-1,Na))
@@ -34,6 +35,7 @@ restrict!(a,b) = @inside a[I] = restrict(I,b)
 prolongate!(a,b) = @inside a[I] = b[down(I)]
 
 @inline divisible(N) = mod(N,2)==0 && N>4
+@inline divisible(l::Poisson) = all(size(l.x) .|> divisible)
 @inline divisible(l::Poisson) = all(size(l.x) .|> divisible)
 """
     MultiLevelPoisson{N,M}
@@ -49,7 +51,9 @@ struct MultiLevelPoisson{T,S<:AbstractArray{T},V<:AbstractArray{T}} <: AbstractP
     n :: Vector{Int16}
     perdir :: NTuple # direction of periodic boundary condition
     function MultiLevelPoisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};maxlevels=Inf,perdir=()) where T
+    function MultiLevelPoisson(x::AbstractArray{T},L::AbstractArray{T},z::AbstractArray{T};maxlevels=Inf,perdir=()) where T
         levels = Poisson[Poisson(x,L,z;perdir)]
+        while divisible(levels[end]) && length(levels) <= maxlevels
         while divisible(levels[end]) && length(levels) <= maxlevels
             push!(levels,restrictML(levels[end]))
         end
@@ -58,6 +62,7 @@ struct MultiLevelPoisson{T,S<:AbstractArray{T},V<:AbstractArray{T}} <: AbstractP
         new{T,typeof(x),typeof(L)}(x,L,z,levels,[],perdir)
     end
 end
+
 
 function update!(ml::MultiLevelPoisson)
     update!(ml.levels[1])
@@ -84,16 +89,15 @@ end
 mult!(ml::MultiLevelPoisson,x) = mult!(ml.levels[1],x)
 residual!(ml::MultiLevelPoisson,x) = residual!(ml.levels[1],x)
 
-function solver!(ml::MultiLevelPoisson;log=false,tol=1e-4,itmx=32)
+function solver!(ml::MultiLevelPoisson;tol=1e-6,itmx=32)
     p = ml.levels[1]
-    residual!(p); r₀ = r₂ = L∞(p); r₂₀ = L₂(p)
+    residual!(p); r₂ = L₂(p)
     nᵖ=0
     while nᵖ<itmx
         Vcycle!(ml)
-        smooth!(p); r₂ = L∞(p)
-        nᵖ+=1
-        r₂<tol && break
+        smooth!(p); r₂ = L₂(p)
+        nᵖ+=1; r₂<tol && break
     end
-    BC!(p.x;perdir=p.perdir)
+    perBC!(p.x,p.perdir)
     push!(ml.n,nᵖ);
 end

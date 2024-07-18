@@ -90,10 +90,11 @@ without the corrections, no solution exists.
 """
 function residual!(p::Poisson) 
     perBC!(p.x,p.perdir)
-    @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-mult(I,p.L,p.D,p.x))
-    s = sum(p.r)/length(inside(p.r))
-    abs(s) <= 2eps(eltype(s)) && return
-    @inside p.r[I] = p.r[I]-s
+    # @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-mult(I,p.L,p.D,p.x))
+    # s = sum(p.r)/length(inside(p.r))
+    # abs(s) <= 2eps(eltype(s)) && return
+    # @inside p.r[I] = p.r[I]-s
+    @inside p.r[I] = p.z[I]-mult(I,p.L,p.D,p.x)
 end
 
 function increment!(p::Poisson) 

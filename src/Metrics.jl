@@ -95,7 +95,7 @@ pressure_force(sim) = pressure_force(sim.flow,sim.body)
 pressure_force(flow,body) = pressure_force(flow.p,flow.f,body,time(flow))
 function pressure_force(p,df,body,t=0,T=promote_type(Float64,eltype(p)))
     df .= zero(eltype(p))
-    @loop df[I,:] .= p[I]*nds(body,loc(0,I),t) over I ∈ inside(p)
+    @loop df[I,:] .= -p[I]*nds(body,loc(0,I),t) over I ∈ inside(p)
     sum(T,df,dims=ntuple(i->i,ndims(p)))[:] |> Array
 end
 
@@ -115,7 +115,7 @@ viscous_force(sim) = viscous_force(sim.flow,sim.body)
 viscous_force(flow,body) = viscous_force(flow.u,flow.ν,flow.f,body,time(flow))
 function viscous_force(u,ν,df,body,t=0,T=promote_type(Float64,eltype(u)))
     df .= zero(eltype(u))
-    @loop df[I,:] .= -ν*∇²u(I,u)*nds(body,loc(0,I),t) over I ∈ inside_u(u)
+    @loop df[I,:] .= ν*∇²u(I,u)*nds(body,loc(0,I),t) over I ∈ inside_u(u)
     sum(T,df,dims=ntuple(i->i,ndims(u)-1))[:] |> Array
 end
 
@@ -136,6 +136,6 @@ pressure_moment(x₀,sim) = pressure_moment(x₀,sim.flow,sim.body)
 pressure_moment(x₀,flow,body) = pressure_moment(x₀,flow.p,flow.f,body,time(flow))
 function pressure_moment(x₀,p,df,body,t=0,T=promote_type(Float64,eltype(p)))
     df .= zero(eltype(p))
-    @loop df[I,:] .= p[I]*cross(loc(0,I)-x₀,nds(body,loc(0,I),t)) over I ∈ inside(p)
+    @loop df[I,:] .= -p[I]*cross(loc(0,I)-x₀,nds(body,loc(0,I),t)) over I ∈ inside(p)
     sum(T,df,dims=ntuple(i->i,ndims(p)))[:] |> Array
 end

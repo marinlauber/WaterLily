@@ -27,6 +27,7 @@ include("AutoBody.jl")
 export AutoBody,Bodies,measure,sdf,+,-
 
 include("Metrics.jl")
+export pressure_force,viscous_force,pressure_moment
 
 """
     Simulation(dims::NTuple, u_BC::Union{NTuple,Function}, L::Number;

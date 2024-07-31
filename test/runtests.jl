@@ -15,4 +15,5 @@ function setup_backends()
 end
 
 arrays = setup_backends()
+include("pressure_solver.jl") # always run
 Threads.nthreads() > 1 ? include("maintests.jl") : include("alloctest.jl")

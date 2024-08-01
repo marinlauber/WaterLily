@@ -1,20 +1,16 @@
-# WaterLily
+# WaterLily.jl
 
-## Introduction and Quickstart
+Documentation of the WaterLily library.
 
-```@docs
-WaterLily
-```
+!!! note
 
-## Types Methods and Functions
-```@meta
-CurrentModule = WaterLily
-```
+     These documentation pages are under construction.
 
-```@index
-```
+## Introduction
 
-```@autodocs
-Modules = [WaterLily]
-Order   = [:constant, :type, :function, :macro]
+WaterLily is...🚀!
+
+## Table of Contents
+
+```@contents
 ```

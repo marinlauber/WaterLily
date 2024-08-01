@@ -1,5 +1,14 @@
 using Documenter, WaterLily
 
+pages = [
+  "Home" => "index.md",
+  "Getting Started" => "getting-started.md",
+  "Function Reference" => "methods.md",
+  "WaterLily" => "helper.md",
+#   "WaterLily" => "WaterLily.md",
+  "Developer notes" => "dev-notes.md",
+]
+
 ## find all image files in examples/ dir and copy in docs/src/examples/
 
 recursive_find(directory, pattern) =
@@ -30,7 +39,7 @@ makedocs(
     ),
     authors = "Gabriel Weymouth",
     sitename = "WaterLily.jl",
-    pages = ["index.md"]
+    pages = pages
     # strict = true,
     # clean = true,
     # checkdocs = :exports,

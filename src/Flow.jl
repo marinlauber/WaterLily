@@ -32,7 +32,20 @@ function median(a,b,c)
     end
     return a
 end
+"""
+    conv_diff!(r,u,Φ;ν=0.1,perdir=())
 
+Compute explicitly the convective and diffusive impule of the Navier-Stokes equations 
+
+r = Δt[(u⋅∇)u - ν∇²u]
+
+for a given velocity field `u` and stores them in `r`. `Φ` is a dummy work array.
+- r is the convective and viscous force vector.
+- u is the initial velocity field.
+- Φ is a dummy work array.
+- ν is the kinematic viscosity.
+- perdir is a tuple of periodic direction.
+"""
 function conv_diff!(r,u,Φ;ν=0.1,perdir=())
     r .= 0.
     N,n = size_u(u)
@@ -134,6 +147,13 @@ function BDIM!(a::Flow)
     @loop a.u[Ii] += μddn(Ii,a.μ₁,a.f)+a.V[Ii]+a.μ₀[Ii]*a.f[Ii] over Ii ∈ inside_u(size(a.p))
 end
 
+"""
+    project!(a::Flow,b::AbstractPoisson,w=1)
+
+Project the velocity field contained in the Flow `a` onto the solenoidal space using the Poisson solver `b`.
+This ass the pressure gradient force onto the velocity field `a.u`.
+∇⋅μ₀∇p = ∇⋅u⁰; u = u⁰ + Δtμ⁰∇p
+"""
 function project!(a::Flow{n},b::AbstractPoisson,w=1) where n
     dt = w*a.Δt[end]
     @inside b.z[I] = div(I,a.u); b.x .*= dt # set source term & solution IC

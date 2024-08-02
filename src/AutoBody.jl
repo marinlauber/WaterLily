@@ -66,6 +66,7 @@ Bodies(bodies) = Bodies(bodies,repeat([+],length(bodies)-1))
 Bodies(bodies, op::Function) = Bodies(bodies,repeat([op],length(bodies)-1))
 Base.:+(a::Bodies, b::Bodies) = Bodies(vcat(a.bodies, b.bodies), vcat(a.ops, b.ops))
 Base.:∪(a::Bodies, b::Bodies) = a+b
+Base.copy(b::Bodies) = Bodies(copy(b.bodies),copy(b.ops))
 
 """
     d = sdf(a::Bodies,x,t)
@@ -81,8 +82,8 @@ function sdf(b::Bodies,x,t;kwargs...)
 end
 function reduce_d(d₁,d₂,op)
     (Base.:+ == op || Base.:∪ == op) && return min(d₁,d₂)
+    Base.:- == op && return max(d₁,-d₂)
     Base.:∩ == op && return max(d₁,d₂)
-    # Base.:- == op && return max(d₁,-d₂)
     return d₁
 end
 
@@ -105,8 +106,8 @@ function measure(body::Bodies,x,t;fastd²=Inf)
 end
 function reduce_bodies(d₁,n₁,v₁,d₂,n₂,v₂,op)
     (Base.:+ == op || Base.:∪ == op) && d₁ > d₂ && return (d₂,n₂,v₂)
+    Base.:- == op && d₁ < -d₂ && return (-d₂,-n₂,v₂) # velocity is not inverted
     Base.:∩ == op && d₁ < d₂ && return (d₂,n₂,v₂)
-    # Base.:- == op && d₁ > -d₂ && return (d₁,n₁,v₁)
     return d₁,n₁,v₁
 end
 function measure(body::AutoBody,x,t;fastd²=Inf)

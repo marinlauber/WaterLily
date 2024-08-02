@@ -57,7 +57,7 @@ Constructor for a WaterLily.jl simulation:
 
 See files in `examples` folder for examples.
 """
-mutable struct Simulation
+mutable struct Simulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
@@ -120,9 +120,6 @@ function measure!(sim::Simulation,t=sum(sim.flow.Δt))
 end
 
 export AbstractSimulation,Simulation,sim_step!,sim_time,measure!
-
-include("PreCICE.jl")
-export Store,store!,revert!,initialize!,initialize,getDeformation
 
 # default WriteVTK functions
 function vtkWriter end

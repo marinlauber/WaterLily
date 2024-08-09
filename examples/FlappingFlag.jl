@@ -5,8 +5,8 @@ using Splines
 using StaticArrays
 using LinearAlgebra
 
-include("TwoD_plots.jl")
-include("../src/Coupling.jl")
+# include("TwoD_plots.jl")
+# include("../src/Coupling.jl")
 
 # let # enables global modifcation of variables
     
@@ -47,15 +47,11 @@ U=1
 ϵ=0.5
 thk=2ϵ+√2
 
-# spline distance function
-dis(p,n) = √(p'*p) - thk/2
-
 # construct from mesh, this can be tidy
-u⁰ = MMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:].*L.+[2L,3L].+1.5)
-nurbs = NurbsCurve(copy(u⁰),mesh.knots,mesh.weights)
+u⁰ = SMatrix{2,size(mesh.controlPoints,2)}(mesh.controlPoints[1:2,:].*L.+[2L,3L].+1.5)
 
 # flow sim
-body = DynamicBody(nurbs, (0,1); dist=dis);
+body = DynamicNurbsBody(NurbsCurve(u⁰,mesh.knots,mesh.weights);thk,boundary=false)
 
 # force function
 integration_points = uv_integration(struc)
@@ -74,7 +70,7 @@ a₀ = 0.5
 Ut(i,t::T) where T = i==1 ? convert(T,a₀*t+(1.0+tanh(31.4*(t-1.0/a₀)))/2.0*(1-a₀*t)) : zero(T)
 # Ut(i,t::T) where T = convert(T,-vel[i])
 sim = CoupledSimulation((8L,6L),Ut,L,body,struc,IQNCoupling;
-                         U,ν=U*L/Re,ϵ,ωᵣ=0.05,maxCol=6,T=Float64)
+                         U,ν=U*L/Re,ϵ,T=Float64,relax=0.05,maxCol=6)
 
 # sime time
 t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
@@ -99,7 +95,7 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
             solve_step!(sim.struc, sim.forces, sim.flow.Δt[end]/sim.L)
             
             # update flow, this requires scaling the displacements
-            ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
+            sim.body = ParametricBodies.update!(sim.body,u⁰.+L*sim.pnts,sim.flow.Δt[end])
             measure!(sim,t); mom_step!(sim.flow,sim.pois)
 
             # get new coupling variable
@@ -140,5 +136,3 @@ t₀ = round(sim_time(sim)); duration = 10.0; step = 0.2
     plot!(sim.body.surf)
     plot!(title="tU/L $tᵢ")
 end
-
-end # let

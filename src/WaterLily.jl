@@ -55,7 +55,7 @@ Constructor for a WaterLily.jl simulation:
 
 See files in `examples` folder for examples.
 """
-struct Simulation <: AbstractSimulation
+mutable struct Simulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
@@ -63,7 +63,7 @@ struct Simulation <: AbstractSimulation
     body :: AbstractBody
     pois :: AbstractPoisson
     function Simulation(dims::NTuple{N}, u_BC, L::Number;
-                        Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(0,),
+                        Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(),
                         uλ=nothing, exitBC=false, body::AbstractBody=NoBody(),
                         T=Float32, mem=Array) where N
         @assert !(isa(u_BC,Function) && isa(uλ,Function)) "`u_BC` and `uλ` cannot be both specified as Function"
@@ -111,7 +111,7 @@ end
 
 Measure a dynamic `body` to update the `flow` and `pois` coefficients.
 """
-function measure!(sim::AbstractSimulation,t=timeNext(sim.flow))
+function measure!(sim::AbstractSimulation,t=sum(sim.flow.Δt))
     measure!(sim.flow,sim.body;t,ϵ=sim.ϵ)
     update!(sim.pois)
 end

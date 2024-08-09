@@ -33,6 +33,7 @@ function inside_u(dims::NTuple{N},j) where {N}
     CartesianIndices(ntuple( i-> i==j ? (3:dims[i]-1) : (2:dims[i]), N))
 end
 @inline inside_u(dims::NTuple{N}) where N = CartesianIndices((map(i->(2:i-1),dims)...,1:N))
+@inline inside_u(u::AbstractArray) = CartesianIndices(map(i->(2:i-1),size(u)[1:end-1]))
 splitn(n) = Base.front(n),last(n)
 size_u(u) = splitn(size(u))
 
@@ -68,9 +69,8 @@ end
 """
     @loop <expr> over <I ∈ R>
 
-Macro to automate fast CPU or GPU loops using KernelAbstractions.jl.
-The macro creates a kernel function from the expression `<expr>` and
-evaluates that function over the CartesianIndices `I ∈ R`.
+Macro to automate fast loops using @simd when running in serial,
+or KernelAbstractions when running multi-threaded CPU or GPU.
 
 For example
 
@@ -78,28 +78,42 @@ For example
 
 becomes
 
+    @simd for I ∈ R
+        @fastmath @inbounds a[I,i] += sum(loc(i,I))
+    end
+
+on serial execution, or
+
     @kernel function kern(a,i,@Const(I0))
         I ∈ @index(Global,Cartesian)+I0
-        a[I,i] += sum(loc(i,I))
+        @fastmath @inbounds a[I,i] += sum(loc(i,I))
     end
     kern(get_backend(a),64)(a,i,R[1]-oneunit(R[1]),ndrange=size(R))
 
-where `get_backend` is used on the _first_ variable in `expr` (`a` in this example).
+when multi-threading on CPU or using CuArrays.
+Note that `get_backend` is used on the _first_ variable in `expr` (`a` in this example).
 """
 macro loop(args...)
     ex,_,itr = args
     _,I,R = itr.args; sym = []
     grab!(sym,ex)     # get arguments and replace composites in `ex`
     setdiff!(sym,[I]) # don't want to pass I as an argument
-    @gensym kern      # generate unique kernel function name
+    @gensym(kern, kern_) # generate unique kernel function names for serial and KA execution
     return quote
-        @kernel function $kern($(rep.(sym)...),@Const(I0)) # replace composite arguments
+        function $kern($(rep.(sym)...),::Val{1})
+            @simd for $I ∈ $R
+                @fastmath @inbounds $ex
+            end
+        end
+        @kernel function $kern_($(rep.(sym)...),@Const(I0)) # replace composite arguments
             $I = @index(Global,Cartesian)
             $I += I0
             @fastmath @inbounds $ex
         end
-        # $kern(get_backend($(sym[1])),ntuple(j->j==argmax(size($R)) ? 64 : 1,length(size($R))))($(sym...),$R[1]-oneunit($R[1]),ndrange=size($R)) #problems...
-        $kern(get_backend($(sym[1])),64)($(sym...),$R[1]-oneunit($R[1]),ndrange=size($R))
+        function $kern($(rep.(sym)...),_)
+            $kern_(get_backend($(sym[1])),64)($(sym...),$R[1]-oneunit($R[1]),ndrange=size($R))
+        end
+        $kern($(sym...),Val{Threads.nthreads()}()) # dispatch to SIMD for -t 1, or KA otherwise
     end |> esc
 end
 function grab!(sym,ex::Expr)
@@ -108,7 +122,7 @@ function grab!(sym,ex::Expr)
     foreach(a->grab!(sym,a),ex.args[start:end])   # recurse into args
     ex.args[start:end] = rep.(ex.args[start:end]) # replace composites in args
 end
-grab!(sym,ex::Symbol) = union!(sym,[ex])        # grab symbol name
+grab!(sym,ex::Symbol) = union!(sym,[ex])          # grab symbol name
 grab!(sym,ex) = nothing
 rep(ex) = ex
 rep(ex::Expr) = ex.head == :. ? Symbol(ex.args[2].value) : ex
@@ -131,8 +145,8 @@ Apply a vector function `f(i,x)` to the faces of a uniform staggered array `c` o
 a function `f(x)` to the center of a uniform array `c`.
 """
 apply!(f,c) = hasmethod(f,Tuple{Int,CartesianIndex}) ? applyV!(f,c) : applyS!(f,c)
-applyV!(f,c) = @loop c[Ii] = f(last(Ii),loc(Ii)) over Ii ∈ CartesianIndices(c)
-applyS!(f,c) = @loop c[I] = f(loc(0,I)) over I ∈ CartesianIndices(c)
+applyV!(f,c) = @loop c[Ii] = f(last(Ii),loc(Ii,eltype(c))) over Ii ∈ CartesianIndices(c)
+applyS!(f,c) = @loop c[I] = f(loc(0,I,eltype(c))) over I ∈ CartesianIndices(c)
 """
     slice(dims,i,j,low=1)
 
@@ -152,7 +166,7 @@ condition `a[I,i]=A[i]` is applied to the vector component _normal_ to the domai
 boundary. For example `aₓ(x)=Aₓ ∀ x ∈ minmax(X)`. A zero Neumann condition
 is applied to the tangential components.
 """
-function BC!(a,A,saveexit=false,perdir=(0,))
+function BC!(a,A,saveexit=false,perdir=())
     N,n = size_u(a)
     for i ∈ 1:n, j ∈ 1:n
         if j in perdir
@@ -184,39 +198,25 @@ function exitBC!(u,u⁰,U,Δt)
     @loop u[I,1] -= ∮u over I ∈ exitR         # correct flux
 end
 """
-    BC!(a)
-Apply zero Neumann boundary conditions to the ghost cells of a _scalar_ field.
+    perBC!(a,perdir)
+Apply periodic conditions to the ghost cells of a _scalar_ field.
 """
-function BC!(a;perdir=(0,))
-    N = size(a)
-    for j ∈ eachindex(N)
-        if j in perdir
-            @loop a[I] = a[CIj(j,I,N[j]-1)] over I ∈ slice(N,1,j)
-            @loop a[I] = a[CIj(j,I,2)] over I ∈ slice(N,N[j],j)
-        else
-            @loop a[I] = a[I+δ(j,I)] over I ∈ slice(N,1,j)
-            @loop a[I] = a[I-δ(j,I)] over I ∈ slice(N,N[j],j)
-        end
-    end
+perBC!(a,::Tuple{}) = nothing
+perBC!(a, perdir, N = size(a)) = for j ∈ perdir
+    @loop a[I] = a[CIj(j,I,N[j]-1)] over I ∈ slice(N,1,j)
+    @loop a[I] = a[CIj(j,I,2)] over I ∈ slice(N,N[j],j)
 end
-"""
-    BCTuple(f,t,N)
-Generate a tuple of `N` values from either a boundary condition 
-function `f(i,t)` or the tuple of boundary conditions f=(fₓ,...).
-"""
-BCTuple(f::Function,t,N)=ntuple(i->f(i,t),N)
-BCTuple(f::Tuple,t,N)=f
 """
     interp(x::SVector, arr::AbstractArray)
 
     Linear interpolation from array `arr` at index-coordinate `x`.
     Note: This routine works for any number of dimensions.
 """
-function interp(x::SVector{D,T}, arr::AbstractArray{T,D}) where {D,T}
+function interp(x::SVector{D}, arr::AbstractArray{T,D}) where {D,T}
     # Index below the interpolation coordinate and the difference
     i = floor.(Int,x); y = x.-i
-    
-    # CartesianIndices around x 
+
+    # CartesianIndices around x
     I = CartesianIndex(i...); R = I:I+oneunit(I)
 
     # Linearly weighted sum over arr[R] (in serial)
@@ -227,9 +227,8 @@ function interp(x::SVector{D,T}, arr::AbstractArray{T,D}) where {D,T}
     end
     return s
 end
-
-function interp(x::SVector{D,T}, varr::AbstractArray{T}) where {D,T}
+function interp(x::SVector{D}, varr::AbstractArray) where {D}
     # Shift to align with each staggered grid component and interpolate
-    @inline shift(i) = SVector{D,T}(ifelse(i==j,0.5,0.) for j in 1:D)
-    return SVector{D,T}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
+    @inline shift(i) = SVector{D}(ifelse(i==j,0.5,0.0) for j in 1:D)
+    return SVector{D}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
 end

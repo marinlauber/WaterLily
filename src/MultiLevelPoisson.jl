@@ -77,27 +77,22 @@ function Vcycle!(ml::MultiLevelPoisson;l=1)
     smooth!(coarse)
     # correct fine
     prolongate!(fine.ϵ,coarse.x)
-    BC!(fine.ϵ;perdir=fine.perdir)
     increment!(fine)
 end
 
 mult!(ml::MultiLevelPoisson,x) = mult!(ml.levels[1],x)
 residual!(ml::MultiLevelPoisson,x) = residual!(ml.levels[1],x)
 
-function solver!(ml::MultiLevelPoisson;log=false,tol=1e-6,itmx=32)
+function solver!(ml::MultiLevelPoisson;tol=1e-4,itmx=32)
     p = ml.levels[1]
-    BC!(p.x;perdir=p.perdir)
     residual!(p); r₂ = L₂(p)
-    log && (res = [r₂])
     nᵖ=0
     while nᵖ<itmx
         Vcycle!(ml)
         smooth!(p); r₂ = L₂(p)
-        log && push!(res,r₂)
         nᵖ+=1
         r₂<tol && break
     end
-    BC!(p.x;perdir=p.perdir)
+    perBC!(p.x,p.perdir)
     push!(ml.n,nᵖ)
-    log && return res
 end

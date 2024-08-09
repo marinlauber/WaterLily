@@ -28,20 +28,24 @@ at time `t` using an immersion kernel of size `ϵ`.
 
 See Maertens & Weymouth, doi:[10.1016/j.cma.2014.09.007](https://doi.org/10.1016/j.cma.2014.09.007).
 """
-function measure!(a::Flow{N,T},body::AbstractBody;t=T(0),ϵ=1) where {N,T}
-    a.V .= 0; a.μ₀ .= 1; a.μ₁ .= 0; a.σᵥ .= 0
+function measure!(a::Flow{N,T},body::AbstractBody;t=zero(T),ϵ=1) where {N,T}
+    a.V .= zero(T); a.μ₀ .= one(T); a.μ₁ .= zero(T); a.σᵥ .= zero(T); d²=(2+ϵ)^2
     @fastmath @inline function fill!(μ₀,μ₁,V,σᵥ,d,I)
-        d[I] = sdf(body,loc(0,I,T),t)
+        d[I] = sdf(body,loc(0,I,T),t,fastd²=d²)
         σᵥ[I] = WaterLily.μ₀(d[I],ϵ)-1 # cell-center array
-        if abs(d[I])<2+ϵ
+        if d[I]^2<d²
             for i ∈ 1:N
-                dᵢ,nᵢ,Vᵢ = measure(body,WaterLily.loc(i,I,T),t)
+                dᵢ,nᵢ,Vᵢ = measure(body,loc(i,I,T),t,fastd²=d²)
                 V[I,i] = Vᵢ[i]
                 μ₀[I,i] = WaterLily.μ₀(dᵢ,ϵ)
-                μ₁[I,i,:] .= WaterLily.μ₁(dᵢ,ϵ)*nᵢ
+                for j ∈ 1:N
+                    μ₁[I,i,j] = WaterLily.μ₁(dᵢ,ϵ)*nᵢ[j]
+                end
             end
-        elseif d[I]<0
-            μ₀[I,:] .= 0
+        elseif d[I]<zero(T)
+            for i ∈ 1:N
+                μ₀[I,i] = zero(T)
+            end
         end
     end
     @loop fill!(a.μ₀,a.μ₁,a.V,a.σᵥ,a.σ,I) over I ∈ inside(a.p)

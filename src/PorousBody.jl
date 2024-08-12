@@ -5,8 +5,8 @@ using StaticArrays
 struct PorousBody{F1<:Function,F2<:Function} <: AbstractBody
     sdf::F1
     map::F2
-    κ:: Float64
-    ε:: Float64
+    κ:: Float64 # permeability of a material (m²), Da is the Darcy number Da = k/D²
+    ε:: Float64 # porosity
     function PorousBody(κ, ε, sdf, map=(x,t)->x; compose=true)
         comp(x,t) = compose ? sdf(map(x,t),t) : sdf(x,t)
         new{typeof(comp),typeof(map)}(comp, map, κ, ε)
@@ -53,37 +53,65 @@ function WaterLily.measure!(a::Flow{N,T},body::PorousBody;t=zero(T),ϵ=1) where 
     end
     @loop fill!(a.μ₀,a.μ₁,a.V,a.σ,I) over I ∈ inside(a.p)
     BC!(a.μ₀,zeros(SVector{N,T}),false,a.perdir) # BC on μ₀, don't fill normal component yet
-    BC!(a.V ,zeros(SVector{N,T}),a.exitBC,a.perdir)
     # now that we have filled the kernel, we compute the Velocity V from the 
     # Darcy-Brinkman-Forchheimer equation
     DarcyBrinkmanForchheimer!(a.V,a.u,a.σ;ν=a.ν,κ=body.κ,ε=body.ε)
+    BC!(a.V,zeros(SVector{N,T}),a.exitBC,a.perdir)
 end
 function DarcyBrinkmanForchheimer!(r,u,Φ;ν=0.1,κ=0.1,ε=1)
-    F = 1.75/√150/ε^1.5 # inertial factor (Dhinakaran and Ponmozhi, 2011).
-    r .= 0.
-    N,n = size_u(u)
-    for i ∈ 1:n, j ∈ 1:n
-        # treatment for bottom boundary with BCs
-        @loop r[I,i] += (1/ε^2)*ϕuL(j,CI(I,i),u,ϕ(i,CI(I,j),u)) - ν/ε*∂(j,CI(I,i),u) - (ν/κ+F/√κ*√sum(abs2,(u[I,:])))*u[I,i] over I ∈ slice(N,2,j,2)
-        # inner cells
+    F = 1.75/(√150*ε^1.5) # inertial factor (Dhinakaran and Ponmozhi, 2011).
+    r .= 0.; N,n = size_u(u)
+    for i ∈ 1:n, j ∈ 1:n # only inner cells, body cannot touch boundaries
         @loop (Φ[I] = (1/ε^2)*ϕu(j,CI(I,i),u,ϕ(i,CI(I,j),u)) - ν/ε*∂(j,CI(I,i),u) - (ν/κ+F/√κ*√sum(abs2,(u[I,:])))*u[I,i];
                r[I,i] += Φ[I]) over I ∈ inside_u(N,j)
         @loop r[I-δ(j,I),i] -= Φ[I] over I ∈ inside_u(N,j)
-        # treatment for upper boundary with BCs
-        @loop r[I-δ(j,I),i] += -(1/ε^2)*ϕuR(j,CI(I,i),u,ϕ(i,CI(I,j),u)) + ν/ε*∂(j,CI(I,i),u) - (ν/κ+F/√κ*√sum(abs2,(u[I,:])))*u[I,i] over I ∈ slice(N,N[j],j,2)
+    end
+end
+
+mutable struct PorousSimulation <: AbstractSimulation
+    U :: Number # velocity scale
+    L :: Number # length scale
+    ϵ :: Number # kernel width
+    flow :: Flow
+    body :: AbstractBody
+    pois :: AbstractPoisson
+    function PorousSimulation(dims::NTuple{N}, u_BC, L::Number;
+                              Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(),
+                              uλ=nothing, exitBC=false, body::AbstractBody=NoBody(),
+                              T=Float32, mem=Array) where N
+        @assert !(isa(u_BC,Function) && isa(uλ,Function)) "`u_BC` and `uλ` cannot be both specified as Function"
+        @assert !(isnothing(U) && isa(u_BC,Function)) "`U` must be specified if `u_BC` is a Function"
+        isa(u_BC,Function) && @assert all(typeof.(ntuple(i->u_BC(i,zero(T)),N)).==T) "`u_BC` is not type stable"
+        uλ = isnothing(uλ) ? ifelse(isa(u_BC,Function),(i,x)->u_BC(i,0.),(i,x)->u_BC[i]) : uλ
+        U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
+        flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC)
+        measure!(flow,body;ϵ)
+        μ₀ = copy(flow.μ₀); μ₀ .= 1.0; BC!(μ₀,ntuple(zero,N),false,perdir)
+        new(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,μ₀,flow.σ;perdir))
     end
 end
 
 using WaterLily
 include("../../Tutorials-WaterLily/src/TwoD_plots.jl")
 
-function circle(n,m;Re=250,U=1)
-    radius, center = m/8, m/2
-    body = PorousBody(1e6,10,(x,t)->√sum(abs2, x .- center) - radius)
-    Simulation((n,m), (U,0), radius; ν=U*radius/Re, body)
+# WaterLily.CFL(a::Flow) = WaterLily.CFL(a::Flow;Δt_max=0.1)
+
+# function circle_ref(;L=32,Re=250,U=1,ϵ=1)
+#     radius, center = L/2, 2L
+#     body = AutoBody((x,t)->√sum(abs2, x .- center) - radius)
+#     Simulation((8L,4L), (U,0), radius; ν=U*radius/Re, body)
+# end
+
+function circle(;L=32,Re=150,Da=1e-6,U=1,ϵ=1)
+    radius, center = L/2, 2L
+    κ = Da*L^2 # permeability of a material (m²), Da is the Darcy number Da = k/D²
+    ε = 0.5 # porosity
+    body = PorousBody(κ,ε,(x,t)->√sum(abs2, x .- center) - radius)
+    PorousSimulation((8L,4L), (U,0), radius; ν=U*radius/Re, body)
 end
 
 # Initialize and run
-sim = circle(3*2^6,2^7)
+sim = circle();
+mom_step!(sim.flow,sim.pois)
 sim_gif!(sim,duration=10,clims=(-5,5),plotbody=true,remeasure=true)
 

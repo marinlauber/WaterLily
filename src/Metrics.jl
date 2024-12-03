@@ -87,7 +87,7 @@ BDIM-masked surface normal.
 end
 
 """
-    pressure_force(sim::Simulation)
+    pressure_force(sim::AbstractSimulation)
 
 Compute the pressure force on an immersed body.
 """
@@ -107,7 +107,7 @@ Rate-of-strain tensor.
 ∇²u(I::CartesianIndex{2},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:2, j ∈ 1:2]
 ∇²u(I::CartesianIndex{3},u) = @SMatrix [∂(i,j,I,u)+∂(j,i,I,u) for i ∈ 1:3, j ∈ 1:3]
 """
-   viscous_force(sim::Simulation)
+   viscous_force(sim::AbstractSimulation)
 
 Compute the viscous force on an immersed body.
 """
@@ -120,7 +120,7 @@ function viscous_force(u,ν,df,body,t=0,T=promote_type(Float64,eltype(u)))
 end
 
 """
-   total_force(sim::Simulation)
+   total_force(sim::AbstractSimulation)
 
 Compute the total force on an immersed body.
 """
@@ -128,7 +128,7 @@ total_force(sim) = pressure_force(sim) .+ viscous_force(sim)
 
 using LinearAlgebra: cross
 """
-    pressure_moment(x₀,sim::Simulation)
+    pressure_moment(x₀,sim::AbstractSimulation)
 
 Computes the pressure moment on an immersed body relative to point x₀.
 """

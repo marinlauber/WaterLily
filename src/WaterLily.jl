@@ -28,6 +28,7 @@ export AutoBody,Bodies,measure,sdf,+,-
 
 include("Metrics.jl")
 
+abstract type AbstractSimulation end
 """
     Simulation(dims::NTuple, u_BC::Union{NTuple,Function}, L::Number;
                U=norm2(u_BC), Δt=0.25, ν=0., ϵ=1, perdir=()
@@ -55,7 +56,7 @@ Constructor for a WaterLily.jl simulation:
 
 See files in `examples` folder for examples.
 """
-mutable struct Simulation
+mutable struct Simulation <: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
@@ -77,24 +78,24 @@ mutable struct Simulation
     end
 end
 
-time(sim::Simulation) = time(sim.flow)
+time(sim::AbstractSimulation) = time(sim.flow)
 """
-    sim_time(sim::Simulation)
+    sim_time(sim::AbstractSimulation)
 
 Return the current dimensionless time of the simulation `tU/L`
 where `t=sum(Δt)`, and `U`,`L` are the simulation velocity and length
 scales.
 """
-sim_time(sim::Simulation) = time(sim)*sim.U/sim.L
+sim_time(sim::AbstractSimulation) = time(sim)*sim.U/sim.L
 
 """
-    sim_step!(sim::Simulation,t_end=sim(time)+Δt;max_steps=typemax(Int),remeasure=true,verbose=false)
+    sim_step!(sim::AbstractSimulation,t_end=sim(time)+Δt;max_steps=typemax(Int),remeasure=true,verbose=false)
 
 Integrate the simulation `sim` up to dimensionless time `t_end`.
 If `remeasure=true`, the body is remeasured at every time step.
 Can be set to `false` for static geometries to speed up simulation.
 """
-function sim_step!(sim::Simulation,t_end;remeasure=true,max_steps=typemax(Int),verbose=false)
+function sim_step!(sim::AbstractSimulation,t_end;remeasure=true,max_steps=typemax(Int),verbose=false)
     steps₀ = length(sim.flow.Δt)
     while sim_time(sim) < t_end && length(sim.flow.Δt) - steps₀ < max_steps
         sim_step!(sim; remeasure)
@@ -102,22 +103,22 @@ function sim_step!(sim::Simulation,t_end;remeasure=true,max_steps=typemax(Int),v
             ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
-function sim_step!(sim::Simulation;remeasure=true)
+function sim_step!(sim::AbstractSimulation;remeasure=true)
     remeasure && measure!(sim)
     mom_step!(sim.flow,sim.pois)
 end
 
 """
-    measure!(sim::Simulation,t=timeNext(sim))
+    measure!(sim::AbstractSimulation,t=timeNext(sim))
 
 Measure a dynamic `body` to update the `flow` and `pois` coefficients.
 """
-function measure!(sim::Simulation,t=sum(sim.flow.Δt))
+function measure!(sim::AbstractSimulation,t=sum(sim.flow.Δt))
     measure!(sim.flow,sim.body;t,ϵ=sim.ϵ)
     update!(sim.pois)
 end
 
-export Simulation,sim_step!,sim_time,measure!
+export AbstractSimulation,Simulation,sim_step!,sim_time,measure!
 
 # default WriteVTK functions
 function vtkWriter end
